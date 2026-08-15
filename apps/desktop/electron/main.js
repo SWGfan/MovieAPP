@@ -1,10 +1,13 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const { spawn } = require('child_process')
 const Store = require('electron-store')
+const { startStreamServer, PORT: STREAM_PORT } = require('./streamServer')
 
 const store = new Store()
+let streamServerInfo = null
 
 const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.m4v', '.webm']
 const EMULATOR_EXTS = ['.exe']
@@ -80,7 +83,26 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  streamServerInfo = startStreamServer({
+    getMoviesDir,
+    store,
+    log: (msg) => console.log('[stream]', msg)
+  })
 })
+
+function getNetworkAddresses() {
+  const nets = os.networkInterfaces()
+  const out = []
+  for (const [name, addrs] of Object.entries(nets)) {
+    for (const addr of addrs || []) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        out.push({ interface: name, address: addr.address, isTailscale: /tailscale/i.test(name) || addr.address.startsWith('100.') })
+      }
+    }
+  }
+  return out
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
@@ -152,4 +174,15 @@ ipcMain.handle('tmdb:search', async (_e, query) => {
   } catch (err) {
     return { error: String(err) }
   }
+})
+
+ipcMain.handle('remote:getAccessInfo', () => {
+  const addresses = getNetworkAddresses()
+  const token = streamServerInfo?.token
+  const port = streamServerInfo?.port || STREAM_PORT
+  const links = addresses.map((a) => ({
+    ...a,
+    url: `http://${a.address}:${port}/?t=${token}`
+  }))
+  return { links, port, hasTailscale: links.some((l) => l.isTailscale) }
 })

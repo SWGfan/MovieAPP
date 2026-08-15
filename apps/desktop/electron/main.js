@@ -128,11 +128,25 @@ ipcMain.handle('emulators:launch', (_e, { emulatorPath, romPath }) => {
 })
 
 ipcMain.handle('tmdb:search', async (_e, query) => {
-  const apiKey = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
-  if (!apiKey) return { error: 'no_api_key' }
-  const url = `https://api.themoviedb.org/3/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query)}`
+  const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
+  if (!key) return { error: 'no_api_key' }
+
+  // TMDB issues two kinds of credentials that both work for read endpoints:
+  //  - v3 "API Key": a short alphanumeric string -> passed as ?api_key=
+  //  - v4 "Read Access Token": a long JWT (three dot-separated segments) -> passed as a Bearer header
+  const isV4Token = key.split('.').length === 3
+
+  const url = isV4Token
+    ? `https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(query)}`
+    : `https://api.themoviedb.org/3/search/movie?api_key=${key}&query=${encodeURIComponent(query)}`
+
   try {
-    const res = await fetch(url)
+    const res = await fetch(url, {
+      headers: isV4Token
+        ? { Authorization: `Bearer ${key}`, accept: 'application/json' }
+        : { accept: 'application/json' }
+    })
+    if (!res.ok) return { error: `tmdb_http_${res.status}` }
     const data = await res.json()
     return { results: data.results || [] }
   } catch (err) {

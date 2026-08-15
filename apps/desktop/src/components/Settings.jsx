@@ -40,11 +40,11 @@ export default function Settings() {
       </div>
 
       <div style={{ marginBottom: 20 }}>
-        <label>TMDB API key</label>
+        <label>TMDB API key / token</label>
         <div className="row">
           <input
             type="password"
-            placeholder="Paste your TMDB v3 API key"
+            placeholder="Paste your TMDB v3 API key or v4 Read Access Token"
             value={settings.tmdbApiKey}
             onChange={(e) => setSettings((s) => ({ ...s, tmdbApiKey: e.target.value }))}
             style={{ flex: 1 }}
@@ -52,7 +52,7 @@ export default function Settings() {
           <button className="primary" onClick={save}>{saved ? 'Saved ✓' : 'Save'}</button>
         </div>
         <p style={{ color: '#8a8f98', fontSize: 12 }}>
-          Free key at themoviedb.org → Settings → API.
+          Free at themoviedb.org → Settings → API. Either the short v3 API key or the long v4 Read Access Token works.
         </p>
       </div>
     </div>

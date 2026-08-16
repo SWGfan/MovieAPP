@@ -9,6 +9,7 @@ export default function Users() {
   const [error, setError] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
+  const [editingEmail, setEditingEmail] = useState('')
 
   const refresh = async () => {
     try {
@@ -34,7 +35,7 @@ export default function Users() {
       const { user, code, emailed } = await window.movieapp.createUser(newName.trim(), newEmail.trim())
       setNewName('')
       setNewEmail('')
-      setLastCode({ name: user.name, code, emailed })
+      setLastCode({ name: user.name, username: user.username, code, emailed })
       await refresh()
     } catch (err) {
       setError(`Couldn't create user: ${err?.message || err}`)
@@ -45,7 +46,7 @@ export default function Users() {
     setError('')
     try {
       const result = await window.movieapp.approveRequest(id)
-      if (result) setLastCode({ name: result.user.name, code: result.code, emailed: result.emailed })
+      if (result) setLastCode({ name: result.user.name, username: result.user.username, code: result.code, emailed: result.emailed })
       await refresh()
     } catch (err) {
       setError(`Couldn't approve request: ${err?.message || err}`)
@@ -82,11 +83,11 @@ export default function Users() {
     }
   }
 
-  const regenerate = async (id, name) => {
+  const regenerate = async (id, name, username) => {
     setError('')
     try {
       const { code, emailed } = await window.movieapp.regenerateCode(id)
-      setLastCode({ name, code, emailed })
+      setLastCode({ name, username, code, emailed })
       await refresh()
     } catch (err) {
       setError(`Couldn't generate a code: ${err?.message || err}`)
@@ -117,11 +118,13 @@ export default function Users() {
   const startEditing = (u) => {
     setEditingId(u.id)
     setEditingName(u.name)
+    setEditingEmail(u.email || '')
   }
 
   const cancelEditing = () => {
     setEditingId(null)
     setEditingName('')
+    setEditingEmail('')
   }
 
   const saveEditing = async (id) => {
@@ -129,11 +132,13 @@ export default function Users() {
     if (!editingName.trim()) return
     try {
       await window.movieapp.renameUser(id, editingName.trim())
+      await window.movieapp.setUserEmail(id, editingEmail.trim())
       setEditingId(null)
       setEditingName('')
+      setEditingEmail('')
       await refresh()
     } catch (err) {
-      setError(`Couldn't rename user: ${err?.message || err}`)
+      setError(`Couldn't update user: ${err?.message || err}`)
     }
   }
 
@@ -172,11 +177,11 @@ export default function Users() {
             fontSize: 14
           }}
         >
-          Code for <strong>{lastCode.name}</strong>: <span style={{ fontFamily: 'monospace', fontSize: 16 }}>{lastCode.code}</span>
+          Login for <strong>{lastCode.name}</strong> — username: <span style={{ fontFamily: 'monospace', fontSize: 16 }}>{lastCode.username}</span>, code: <span style={{ fontFamily: 'monospace', fontSize: 16 }}>{lastCode.code}</span>
           <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 4 }}>
             {lastCode.emailed
               ? "Emailed to them automatically — you don't need to do anything else."
-              : "It won't be shown again (you can always generate a new one below). Add an email notification setup so this gets sent automatically."}
+              : "The code won't be shown again (you can always generate a new one below). Add an email notification setup so this gets sent automatically."}
           </div>
         </div>
       )}
@@ -233,13 +238,21 @@ export default function Users() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
               <div style={{ flex: 1, minWidth: 180 }}>
                 {editingId === u.id ? (
-                  <div className="row" style={{ marginBottom: 0 }}>
+                  <div className="row" style={{ marginBottom: 0, flexWrap: 'wrap' }}>
                     <input
                       value={editingName}
                       onChange={(e) => setEditingName(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && saveEditing(u.id)}
-                      style={{ flex: 1 }}
+                      placeholder="Name"
+                      style={{ flex: 1, minWidth: 120 }}
                       autoFocus
+                    />
+                    <input
+                      value={editingEmail}
+                      onChange={(e) => setEditingEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveEditing(u.id)}
+                      placeholder="Email (optional)"
+                      style={{ flex: 1, minWidth: 160 }}
                     />
                     <button className="primary" onClick={() => saveEditing(u.id)}>Save</button>
                     <button onClick={cancelEditing} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
@@ -263,7 +276,12 @@ export default function Users() {
                     </button>
                   </div>
                 )}
-                <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 2 }}>Added {new Date(u.createdAt).toLocaleDateString()}</div>
+                <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 2 }}>
+                  Username: <span style={{ fontFamily: 'monospace' }}>{u.username}</span> · Added {new Date(u.createdAt).toLocaleDateString()}
+                </div>
+                <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 2 }}>
+                  {u.email || 'No email on file'}
+                </div>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: '#c7cad1', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -274,7 +292,7 @@ export default function Users() {
                 </label>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => regenerate(u.id, u.name)} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                <button onClick={() => regenerate(u.id, u.name, u.username)} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
                   New code
                 </button>
                 {u.status === 'approved' ? (

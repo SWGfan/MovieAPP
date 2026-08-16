@@ -26,14 +26,58 @@ function hashCode(code) {
 }
 
 function generateCode() {
-  // e.g. 7F3K-9QRT — easy to read aloud/type, hard to guess
+  // e.g. 7F3K — short on purpose since login now also requires the user's username
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I ambiguity
-  const part = () => Array.from({ length: 4 }, () => chars[crypto.randomInt(chars.length)]).join('')
-  return `${part()}-${part()}`
+  return Array.from({ length: 4 }, () => chars[crypto.randomInt(chars.length)]).join('')
+}
+
+function slugifyUsername(name) {
+  const slug = String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 20)
+  return slug || 'user'
+}
+
+function normalizeUsername(raw) {
+  return String(raw || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '')
+}
+
+function uniqueUsername(store, base) {
+  const users = getUsers(store)
+  let candidate = base
+  let n = 1
+  while (users.some((u) => u.username === candidate)) {
+    n += 1
+    candidate = `${base}${n}`
+  }
+  return candidate
 }
 
 function getUsers(store) {
-  return store.get('authUsers') || []
+  const users = store.get('authUsers') || []
+  // Backfill usernames for users created before login required one.
+  let changed = false
+  const seen = new Set()
+  const withUsernames = users.map((u) => {
+    if (u.username) {
+      seen.add(u.username)
+      return u
+    }
+    changed = true
+    let base = slugifyUsername(u.name)
+    let candidate = base
+    let n = 1
+    while (seen.has(candidate)) {
+      n += 1
+      candidate = `${base}${n}`
+    }
+    seen.add(candidate)
+    return { ...u, username: candidate }
+  })
+  if (changed) store.set('authUsers', withUsernames)
+  return withUsernames
 }
 function setUsers(store, users) {
   store.set('authUsers', users)
@@ -48,9 +92,11 @@ function setRequests(store, reqs) {
 function createUser(store, name, email) {
   const users = getUsers(store)
   const code = generateCode()
+  const username = uniqueUsername(store, slugifyUsername(name))
   const user = {
     id: crypto.randomUUID(),
     name: name?.trim() || 'Unnamed',
+    username,
     email: (email || '').trim().toLowerCase(),
     codeHash: hashCode(code),
     status: 'approved',
@@ -79,6 +125,13 @@ function setUserAdmin(store, userId, isAdmin) {
 
 function renameUser(store, userId, name) {
   const users = getUsers(store).map((u) => (u.id === userId ? { ...u, name: name?.trim() || u.name } : u))
+  setUsers(store, users)
+}
+
+function setUserEmail(store, userId, email) {
+  const users = getUsers(store).map((u) =>
+    u.id === userId ? { ...u, email: (email || '').trim().toLowerCase() } : u
+  )
   setUsers(store, users)
 }
 
@@ -140,6 +193,12 @@ function findApprovedUserByCode(store, code) {
   return getUsers(store).find((u) => u.codeHash === hash && u.status === 'approved') || null
 }
 
+function findApprovedUserByUsernameAndCode(store, username, code) {
+  const uname = normalizeUsername(username)
+  const hash = hashCode(code)
+  return getUsers(store).find((u) => u.username === uname && u.codeHash === hash && u.status === 'approved') || null
+}
+
 function isUserApproved(store, userId) {
   const u = getUsers(store).find((x) => x.id === userId)
   return !!u && u.status === 'approved'
@@ -181,6 +240,7 @@ function parseCookies(req) {
 
 module.exports = {
   normalizeCode,
+  normalizeUsername,
   getUsers,
   getRequests,
   createUser,
@@ -189,11 +249,13 @@ module.exports = {
   deleteUser,
   setUserAdmin,
   renameUser,
+  setUserEmail,
   regenerateCode,
   submitAccessRequest,
   approveRequest,
   denyRequest,
   findApprovedUserByCode,
+  findApprovedUserByUsernameAndCode,
   findApprovedUserByEmail,
   signSession,
   verifySession,

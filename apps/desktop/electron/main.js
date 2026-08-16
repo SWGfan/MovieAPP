@@ -205,7 +205,7 @@ async function emailCodeIfPossible(user, code) {
   const result = await mailer.sendMail(store, {
     to: user.email,
     subject: 'Your MovieAPP access code',
-    text: `Hi ${user.name},\n\nHere's your MovieAPP access code: ${code}\n\nGo to the site's "Watch Now" link and enter this code to log in.`
+    text: `Hi ${user.name},\n\nYour MovieAPP username: ${user.username}\nYour access code: ${code}\n\nGo to the site's "Watch Now" link and enter both to log in.`
   })
   return result.ok
 }
@@ -267,6 +267,11 @@ ipcMain.handle('auth:setUserAdmin', (_e, { userId, isAdmin } = {}) => {
 
 ipcMain.handle('auth:renameUser', (_e, { userId, name } = {}) => {
   auth.renameUser(store, userId, name)
+  return true
+})
+
+ipcMain.handle('auth:setUserEmail', (_e, { userId, email } = {}) => {
+  auth.setUserEmail(store, userId, email)
   return true
 })
 

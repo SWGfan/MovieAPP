@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('movieapp', {
   deleteUser: (userId) => ipcRenderer.invoke('auth:deleteUser', userId),
   setUserAdmin: (userId, isAdmin) => ipcRenderer.invoke('auth:setUserAdmin', { userId, isAdmin }),
   renameUser: (userId, name) => ipcRenderer.invoke('auth:renameUser', { userId, name }),
+  setUserEmail: (userId, email) => ipcRenderer.invoke('auth:setUserEmail', { userId, email }),
 
   listHistory: () => ipcRenderer.invoke('history:list'),
 

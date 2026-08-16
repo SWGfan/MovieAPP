@@ -137,7 +137,8 @@ function loginPage({ error, success } = {}) {
       ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
       ${success ? `<div class="success">${escapeHtml(success)}</div>` : ''}
       <form method="POST" action="/login">
-        <input name="code" placeholder="Access code (e.g. 7F3K-9QRT)" autocapitalize="characters" required>
+        <input name="username" placeholder="Username" autocapitalize="none" autocorrect="off" required>
+        <input name="code" placeholder="Access code (e.g. 7F3K)" autocapitalize="characters" required>
         <button type="submit">Log in</button>
       </form>
       <p class="muted" style="margin-top:18px;">
@@ -224,11 +225,11 @@ function startStreamServer({ getMoviesDir, store, log }) {
     }
 
     if (url.pathname === '/login' && req.method === 'POST') {
-      const { code } = await readBody(req)
-      const user = auth.findApprovedUserByCode(store, code)
+      const { username, code } = await readBody(req)
+      const user = auth.findApprovedUserByUsernameAndCode(store, username, code)
       if (!user) {
         res.writeHead(200, { 'Content-Type': 'text/html' })
-        res.end(loginPage({ error: 'That code is invalid, expired, or has been revoked.' }))
+        res.end(loginPage({ error: 'That username/code combination is invalid, expired, or has been revoked.' }))
         return
       }
       const session = auth.signSession(store, user.id)
@@ -294,7 +295,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
           .sendMail(store, {
             to: user.email,
             subject: 'Your MovieAPP access code',
-            text: `Hi ${user.name},\n\nHere's your new MovieAPP access code: ${code}\n\nYour old code no longer works. Log in at the site's "Watch Now" link and enter this code.`
+            text: `Hi ${user.name},\n\nYour MovieAPP username: ${user.username}\nYour new access code: ${code}\n\nYour old code no longer works. Log in at the site's "Watch Now" link and enter both.`
           })
           .catch(() => {})
       }

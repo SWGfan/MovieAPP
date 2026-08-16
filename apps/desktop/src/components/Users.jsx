@@ -26,7 +26,10 @@ export default function Users() {
 
   const addUser = async () => {
     setError('')
-    if (!newName.trim()) return
+    if (!newName.trim()) {
+      setError("Enter their name too — the name box can't be left blank, even if you filled in an email.")
+      return
+    }
     try {
       const { user, code, emailed } = await window.movieapp.createUser(newName.trim(), newEmail.trim())
       setNewName('')

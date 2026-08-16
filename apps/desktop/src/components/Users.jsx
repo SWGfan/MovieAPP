@@ -10,6 +10,7 @@ export default function Users() {
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [editingEmail, setEditingEmail] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
 
   const refresh = async () => {
     try {
@@ -94,11 +95,20 @@ export default function Users() {
     }
   }
 
-  const removeUser = async (id, name) => {
+  const requestDelete = (id) => {
     setError('')
-    if (!window.confirm(`Delete ${name}? This can't be undone — their code will stop working right away.`)) return
+    setConfirmDeleteId(id)
+  }
+
+  const cancelDelete = () => {
+    setConfirmDeleteId(null)
+  }
+
+  const confirmDelete = async (id) => {
+    setError('')
     try {
       await window.movieapp.deleteUser(id)
+      setConfirmDeleteId(null)
       await refresh()
     } catch (err) {
       setError(`Couldn't delete user: ${err?.message || err}`)
@@ -302,9 +312,21 @@ export default function Users() {
                 ) : (
                   <button className="primary" onClick={() => reactivate(u.id)}>Reactivate</button>
                 )}
-                <button onClick={() => removeUser(u.id, u.name)} style={{ background: '#3a1f22', color: '#ff9d9d', border: '1px solid #6b2b2b', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
-                  Delete
-                </button>
+                {confirmDeleteId === u.id ? (
+                  <>
+                    <span style={{ fontSize: 12, color: '#ff9d9d', alignSelf: 'center' }}>Delete {u.name}?</span>
+                    <button onClick={() => confirmDelete(u.id)} style={{ background: '#6b2b2b', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                      Yes, delete
+                    </button>
+                    <button onClick={cancelDelete} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => requestDelete(u.id)} style={{ background: '#3a1f22', color: '#ff9d9d', border: '1px solid #6b2b2b', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                    Delete
+                  </button>
+                )}
               </div>
             </div>
           </div>

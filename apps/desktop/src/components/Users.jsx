@@ -1,5 +1,45 @@
 import React, { useEffect, useState } from 'react'
 
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '0m'
+  const totalMinutes = Math.round(seconds / 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function watchedSeconds(entry) {
+  return Math.max(0, entry.currentTime || 0)
+}
+
+function computeUserStats(entries) {
+  const now = Date.now()
+  const DAY = 24 * 60 * 60 * 1000
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const hourAgo = now - 60 * 60 * 1000
+  const weekAgo = now - 7 * DAY
+  const monthAgo = now - 30 * DAY
+
+  let total = 0
+  let lastHour = 0
+  let today = 0
+  let week = 0
+  let month = 0
+
+  entries.forEach((e) => {
+    const t = watchedSeconds(e)
+    total += t
+    if (e.startedAt >= hourAgo) lastHour += t
+    if (e.startedAt >= startOfToday.getTime()) today += t
+    if (e.startedAt >= weekAgo) week += t
+    if (e.startedAt >= monthAgo) month += t
+  })
+
+  return { total, lastHour, today, week, month, count: entries.length }
+}
+
 export default function Users() {
   const [users, setUsers] = useState([])
   const [requests, setRequests] = useState([])
@@ -11,6 +51,8 @@ export default function Users() {
   const [editingName, setEditingName] = useState('')
   const [editingEmail, setEditingEmail] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [history, setHistory] = useState([])
+  const [statsUserId, setStatsUserId] = useState(null)
 
   const refresh = async () => {
     try {
@@ -20,11 +62,21 @@ export default function Users() {
     } catch (err) {
       setError(`Couldn't load users: ${err?.message || err}`)
     }
+    try {
+      const entries = await window.movieapp.listHistory()
+      setHistory(entries)
+    } catch (err) {
+      setError(`Couldn't load watch history: ${err?.message || err}`)
+    }
   }
 
   useEffect(() => {
     refresh()
   }, [])
+
+  const toggleStats = (id) => {
+    setStatsUserId((cur) => (cur === id ? null : id))
+  }
 
   const addUser = async () => {
     setError('')
@@ -302,6 +354,9 @@ export default function Users() {
                 </label>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => toggleStats(u.id)} style={{ background: statsUserId === u.id ? '#4f9dff' : '#2a2f3a', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                  {statsUserId === u.id ? 'Hide stats' : 'View stats'}
+                </button>
                 <button onClick={() => regenerate(u.id, u.name, u.username)} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
                   New code
                 </button>
@@ -329,6 +384,53 @@ export default function Users() {
                 )}
               </div>
             </div>
+
+            {statsUserId === u.id && (() => {
+              const userEntries = history.filter((e) => e.userId === u.id)
+              const stats = computeUserStats(userEntries)
+              const sorted = userEntries.slice().sort((a, b) => b.startedAt - a.startedAt)
+              return (
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #2a2f3a' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 8, marginBottom: 14 }}>
+                    {[
+                      ['Last hour', stats.lastHour],
+                      ['Today', stats.today],
+                      ['This week', stats.week],
+                      ['This month', stats.month],
+                      ['All time', stats.total]
+                    ].map(([label, seconds]) => (
+                      <div key={label} style={{ background: '#0f1115', borderRadius: 8, padding: '10px 12px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700 }}>{formatDuration(seconds)}</div>
+                        <div style={{ fontSize: 11, color: '#8a8f98', marginTop: 2 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize: 12, color: '#8a8f98', marginBottom: 8 }}>
+                    {stats.count} viewing session{stats.count === 1 ? '' : 's'}
+                  </div>
+
+                  {sorted.length === 0 && <p className="empty-state">No viewing activity yet.</p>}
+                  {sorted.map((e) => {
+                    const percent = e.duration > 0 ? Math.min(100, Math.round((e.currentTime / e.duration) * 100)) : 0
+                    return (
+                      <div key={e.sessionId} style={{ background: '#0f1115', borderRadius: 8, padding: '10px 12px', marginBottom: 6 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{e.title}</div>
+                          <div style={{ fontSize: 11, color: '#8a8f98', whiteSpace: 'nowrap' }}>{new Date(e.startedAt).toLocaleString()}</div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#8a8f98', marginTop: 2 }}>
+                          {formatDuration(e.currentTime)} watched of {formatDuration(e.duration)} ({percent}%)
+                        </div>
+                        <div style={{ background: '#171a21', borderRadius: 4, height: 5, marginTop: 6, overflow: 'hidden' }}>
+                          <div style={{ background: '#4f9dff', height: '100%', width: `${percent}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
         ))}
       </div>

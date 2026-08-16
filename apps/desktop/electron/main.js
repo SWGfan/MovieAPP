@@ -5,6 +5,9 @@ const os = require('os')
 const { spawn } = require('child_process')
 const Store = require('electron-store')
 const { startStreamServer, PORT: STREAM_PORT } = require('./streamServer')
+const auth = require('./auth')
+const history = require('./history')
+const mailer = require('./mailer')
 
 const store = new Store()
 let streamServerInfo = null
@@ -113,7 +116,11 @@ app.on('window-all-closed', () => {
 ipcMain.handle('settings:get', () => ({
   moviesDir: getMoviesDir(),
   emulatorsDir: getEmulatorsDir(),
-  tmdbApiKey: store.get('tmdbApiKey') || process.env.TMDB_API_KEY || ''
+  tmdbApiKey: store.get('tmdbApiKey') || process.env.TMDB_API_KEY || '',
+  emailUser: store.get('emailUser') || '',
+  emailAppPassword: store.get('emailAppPassword') || '',
+  adminNotifyEmail: store.get('adminNotifyEmail') || '',
+  emailConfigured: mailer.isConfigured(store)
 }))
 
 ipcMain.handle('settings:set', (_e, partial) => {
@@ -178,11 +185,91 @@ ipcMain.handle('tmdb:search', async (_e, query) => {
 
 ipcMain.handle('remote:getAccessInfo', () => {
   const addresses = getNetworkAddresses()
-  const token = streamServerInfo?.token
   const port = streamServerInfo?.port || STREAM_PORT
   const links = addresses.map((a) => ({
     ...a,
-    url: `http://${a.address}:${port}/?t=${token}`
+    url: `http://${a.address}:${port}/login`
   }))
   return { links, port, hasTailscale: links.some((l) => l.isTailscale) }
+})
+
+// --- Users / admin (never exposed over HTTP — only reachable from this app) ---
+
+ipcMain.handle('auth:list', () => ({
+  users: auth.getUsers(store),
+  requests: auth.getRequests(store).filter((r) => r.status === 'pending')
+}))
+
+async function emailCodeIfPossible(user, code) {
+  if (!user.email || !mailer.isConfigured(store)) return false
+  const result = await mailer.sendMail(store, {
+    to: user.email,
+    subject: 'Your MovieAPP access code',
+    text: `Hi ${user.name},\n\nHere's your MovieAPP access code: ${code}\n\nGo to the site's "Watch Now" link and enter this code to log in.`
+  })
+  return result.ok
+}
+
+ipcMain.handle('auth:createUser', async (_e, { name, email } = {}) => {
+  const { user, code } = auth.createUser(store, name, email)
+  const emailed = await emailCodeIfPossible(user, code)
+  return { user, code, emailed }
+})
+
+ipcMain.handle('email:sendTest', async () => {
+  const to = store.get('adminNotifyEmail') || store.get('emailUser')
+  if (!to) return { ok: false, error: 'no_recipient' }
+  return mailer.sendMail(store, {
+    to,
+    subject: 'MovieAPP test email',
+    text: 'If you got this, email notifications are working.'
+  })
+})
+
+ipcMain.handle('auth:approveRequest', async (_e, requestId) => {
+  const result = auth.approveRequest(store, requestId)
+  if (!result) return result
+  const emailed = await emailCodeIfPossible(result.user, result.code)
+  return { ...result, emailed }
+})
+
+ipcMain.handle('auth:denyRequest', (_e, requestId) => {
+  auth.denyRequest(store, requestId)
+  return true
+})
+
+ipcMain.handle('auth:revokeUser', (_e, userId) => {
+  auth.revokeUser(store, userId)
+  return true
+})
+
+ipcMain.handle('auth:reactivateUser', (_e, userId) => {
+  auth.reactivateUser(store, userId)
+  return true
+})
+
+ipcMain.handle('auth:regenerateCode', async (_e, userId) => {
+  const code = auth.regenerateCode(store, userId)
+  const user = auth.getUsers(store).find((u) => u.id === userId)
+  const emailed = user ? await emailCodeIfPossible(user, code) : false
+  return { code, emailed }
+})
+
+ipcMain.handle('auth:deleteUser', (_e, userId) => {
+  auth.deleteUser(store, userId)
+  return true
+})
+
+ipcMain.handle('auth:setUserAdmin', (_e, { userId, isAdmin } = {}) => {
+  auth.setUserAdmin(store, userId, isAdmin)
+  return true
+})
+
+ipcMain.handle('auth:renameUser', (_e, { userId, name } = {}) => {
+  auth.renameUser(store, userId, name)
+  return true
+})
+
+ipcMain.handle('history:list', () => {
+  return history.getHistory(store).slice().reverse()
 })

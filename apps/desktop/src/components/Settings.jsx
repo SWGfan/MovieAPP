@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from 'react'
 
 export default function Settings() {
-  const [settings, setSettings] = useState({ moviesDir: '', emulatorsDir: '', tmdbApiKey: '' })
+  const [settings, setSettings] = useState({
+    moviesDir: '',
+    emulatorsDir: '',
+    tmdbApiKey: '',
+    emailUser: '',
+    emailAppPassword: '',
+    adminNotifyEmail: '',
+    emailConfigured: false
+  })
   const [saved, setSaved] = useState(false)
+  const [emailSaved, setEmailSaved] = useState(false)
+  const [testResult, setTestResult] = useState('')
   const [remoteInfo, setRemoteInfo] = useState(null)
   const [copied, setCopied] = useState('')
 
@@ -21,6 +31,22 @@ export default function Settings() {
     await window.movieapp.setSettings({ tmdbApiKey: settings.tmdbApiKey })
     setSaved(true)
     setTimeout(() => setSaved(false), 1500)
+  }
+
+  const saveEmail = async () => {
+    await window.movieapp.setSettings({
+      emailUser: settings.emailUser,
+      emailAppPassword: settings.emailAppPassword,
+      adminNotifyEmail: settings.adminNotifyEmail
+    })
+    setEmailSaved(true)
+    setTimeout(() => setEmailSaved(false), 1500)
+  }
+
+  const sendTest = async () => {
+    setTestResult('Sending…')
+    const result = await window.movieapp.sendTestEmail()
+    setTestResult(result.ok ? 'Sent ✓ check your inbox' : `Failed: ${result.error}`)
   }
 
   const pick = async (key) => {
@@ -66,15 +92,49 @@ export default function Settings() {
       </div>
 
       <div style={{ marginBottom: 20 }}>
-        <label>Watch on your phone</label>
-        {!remoteInfo && <p style={{ color: '#8a8f98', fontSize: 13 }}>Loading…</p>}
+        <label>Email notifications</label>
+        <p style={{ color: '#8a8f98', fontSize: 12, marginTop: -4, marginBottom: 10 }}>
+          Powers two things automatically: you get emailed when someone requests access, and users get emailed their
+          code (on approval, or when they use "forgot code") — no manual work either way. Uses your Gmail account
+          with an <strong>App Password</strong> (not your normal password) — get one at{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); window.open('https://myaccount.google.com/apppasswords') }} style={{ color: '#4f9dff' }}>
+            myaccount.google.com/apppasswords
+          </a>{' '}
+          (requires 2-Step Verification to be on).
+        </p>
+        <input
+          placeholder="Your Gmail address"
+          value={settings.emailUser}
+          onChange={(e) => setSettings((s) => ({ ...s, emailUser: e.target.value }))}
+        />
+        <input
+          type="password"
+          placeholder="Gmail App Password (16 characters)"
+          value={settings.emailAppPassword}
+          onChange={(e) => setSettings((s) => ({ ...s, emailAppPassword: e.target.value }))}
+        />
+        <input
+          placeholder="Send admin notifications to (defaults to the address above)"
+          value={settings.adminNotifyEmail}
+          onChange={(e) => setSettings((s) => ({ ...s, adminNotifyEmail: e.target.value }))}
+        />
+        <div className="row">
+          <button className="primary" onClick={saveEmail}>{emailSaved ? 'Saved ✓' : 'Save'}</button>
+          <button onClick={sendTest} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+            Send test email
+          </button>
+          {testResult && <span style={{ color: '#8a8f98', fontSize: 12 }}>{testResult}</span>}
+        </div>
+      </div>
 
-        {remoteInfo && !remoteInfo.hasTailscale && (
-          <p style={{ color: '#8a8f98', fontSize: 13 }}>
-            No Tailscale address detected yet. Install Tailscale on this PC and your phone, sign into both with the
-            same account, then reopen this tab — a link will appear here that works from anywhere.
-          </p>
-        )}
+      <div style={{ marginBottom: 20 }}>
+        <label>Local network links</label>
+        <p style={{ color: '#8a8f98', fontSize: 12, marginTop: -4 }}>
+          Useful for testing on the same WiFi. Your public link (for anywhere access) is the "Watch Now" button on
+          your GitHub Pages site — everyone, including you, needs an access code to log in there. Manage who has one
+          in the <strong>Users</strong> tab.
+        </p>
+        {!remoteInfo && <p style={{ color: '#8a8f98', fontSize: 13 }}>Loading…</p>}
 
         {remoteInfo?.links?.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -86,11 +146,6 @@ export default function Settings() {
                 </button>
               </div>
             ))}
-            <p style={{ color: '#8a8f98', fontSize: 12 }}>
-              {remoteInfo.hasTailscale
-                ? 'The 100.x.x.x link works from anywhere once Tailscale is installed on your phone too. Other links only work on the same WiFi.'
-                : 'This link only works on the same WiFi as this PC.'}
-            </p>
           </div>
         )}
       </div>

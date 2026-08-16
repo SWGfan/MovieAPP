@@ -14,5 +14,20 @@ contextBridge.exposeInMainWorld('movieapp', {
 
   tmdbSearch: (query) => ipcRenderer.invoke('tmdb:search', query),
 
-  getRemoteAccessInfo: () => ipcRenderer.invoke('remote:getAccessInfo')
+  getRemoteAccessInfo: () => ipcRenderer.invoke('remote:getAccessInfo'),
+
+  listUsers: () => ipcRenderer.invoke('auth:list'),
+  createUser: (name, email) => ipcRenderer.invoke('auth:createUser', { name, email }),
+  approveRequest: (requestId) => ipcRenderer.invoke('auth:approveRequest', requestId),
+  denyRequest: (requestId) => ipcRenderer.invoke('auth:denyRequest', requestId),
+  revokeUser: (userId) => ipcRenderer.invoke('auth:revokeUser', userId),
+  reactivateUser: (userId) => ipcRenderer.invoke('auth:reactivateUser', userId),
+  regenerateCode: (userId) => ipcRenderer.invoke('auth:regenerateCode', userId),
+  deleteUser: (userId) => ipcRenderer.invoke('auth:deleteUser', userId),
+  setUserAdmin: (userId, isAdmin) => ipcRenderer.invoke('auth:setUserAdmin', { userId, isAdmin }),
+  renameUser: (userId, name) => ipcRenderer.invoke('auth:renameUser', { userId, name }),
+
+  listHistory: () => ipcRenderer.invoke('history:list'),
+
+  sendTestEmail: () => ipcRenderer.invoke('email:sendTest')
 })

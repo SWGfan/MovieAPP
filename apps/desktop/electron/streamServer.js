@@ -298,6 +298,71 @@ const HEARTBEAT_SCRIPT = `<script>
   setInterval(moviheartbeat, 20000)
 </script>`
 
+// Static reference list — these aren't files in your Emulators folder, just pointers to
+// official download pages for well-known emulators that play nicely with a Bluetooth
+// PS4 (DualShock 4) controller on Windows.
+const RECOMMENDED_EMULATORS = [
+  {
+    name: 'DS4Windows',
+    system: 'Controller driver — install this first',
+    note: 'Makes Windows treat a Bluetooth DS4 as a standard Xbox controller, so every emulator below recognizes it reliably.',
+    url: 'https://ds4-windows.com/'
+  },
+  {
+    name: 'RetroArch',
+    system: 'NES, SNES, N64, Genesis, PS1, GBA, and dozens more — one app',
+    note: 'Built-in DS4 autoconfig profile — usually works the moment it’s paired, no setup needed.',
+    url: 'https://www.retroarch.com/?page=platforms'
+  },
+  {
+    name: 'Dolphin',
+    system: 'GameCube / Wii',
+    note: 'Solid native controller support, works well with DS4 directly or through DS4Windows.',
+    url: 'https://dolphin-emu.org/download/'
+  },
+  {
+    name: 'PCSX2',
+    system: 'PlayStation 2',
+    note: 'Works with DS4 over Bluetooth — most consistent when routed through DS4Windows.',
+    url: 'https://pcsx2.net/downloads'
+  },
+  {
+    name: 'RPCS3',
+    system: 'PlayStation 3',
+    note: 'Native/SDL controller input — best behavior via DS4Windows.',
+    url: 'https://rpcs3.net/download'
+  },
+  {
+    name: 'Cemu',
+    system: 'Wii U',
+    note: 'Same setup as the others — pair the DS4, install DS4Windows if it’s not detected right away.',
+    url: 'https://cemu.info/'
+  }
+]
+
+function recommendedEmulatorsSection() {
+  const cards = RECOMMENDED_EMULATORS.map(
+    (e) => `<div class="card" style="padding:14px;">
+      <div class="title">${escapeHtml(e.name)}</div>
+      <div class="sub">${escapeHtml(e.system)}</div>
+      <div class="sub" style="margin-top:6px;line-height:1.4;">${escapeHtml(e.note)}</div>
+      <a class="btn" style="margin-top:10px;display:inline-block;padding:8px 14px;font-size:13px;"
+         href="${e.url}" target="_blank" rel="noopener">Official site</a>
+    </div>`
+  ).join('')
+
+  return `
+    <h3 style="margin:28px 0 4px;">Recommended Emulators (Bluetooth PS4 controller friendly)</h3>
+    <p class="muted" style="margin:0 0 12px;">
+      These aren't in your library yet — they're links to the official sites. Download and install one on the PC
+      you'll actually play on, pair your DualShock 4 over Bluetooth (hold PS + Share until the light bar flashes,
+      then pick it in Windows Bluetooth settings), then optionally drop the emulator into your Emulators folder
+      so it shows up above too.
+    </p>
+    <div class="grid">${cards}</div>
+  `
+}
+
 function formatBytes(bytes) {
   if (!bytes) return '0 MB'
   const mb = bytes / (1024 * 1024)
@@ -568,6 +633,7 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
         <div class="grid">${appCards || '<p class="empty">No emulator apps found.</p>'}</div>
         <h3 style="margin:28px 0 10px;">Games</h3>
         <div class="grid">${romCards || '<p class="empty">No game files found.</p>'}</div>
+        ${recommendedEmulatorsSection()}
         ${HEARTBEAT_SCRIPT}
       `)
       )

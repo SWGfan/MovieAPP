@@ -20,6 +20,8 @@ const SESSION_COOKIE = 'movieapp_session'
 
 // in-memory cache of fileName -> TMDB result (or null if no match)
 const tmdbCache = new Map()
+// in-memory cache of TMDB movie id -> top cast names
+const creditsCache = new Map()
 
 function encodeId(fileName) {
   return Buffer.from(fileName, 'utf8').toString('base64url')
@@ -77,6 +79,45 @@ async function tmdbLookup(fileName, key) {
   }
 }
 
+async function tmdbCredits(movieId, key) {
+  if (!movieId) return []
+  if (creditsCache.has(movieId)) return creditsCache.get(movieId)
+  if (!key) return []
+
+  const isV4Token = key.split('.').length === 3
+  const url = isV4Token
+    ? `https://api.themoviedb.org/3/movie/${movieId}/credits`
+    : `https://api.themoviedb.org/3/movie/${movieId}/credits?api_key=${key}`
+
+  try {
+    const res = await fetch(url, {
+      headers: isV4Token ? { Authorization: `Bearer ${key}`, accept: 'application/json' } : { accept: 'application/json' }
+    })
+    if (!res.ok) {
+      creditsCache.set(movieId, [])
+      return []
+    }
+    const data = await res.json()
+    const cast = (data.cast || []).slice(0, 8).map((c) => c.name)
+    creditsCache.set(movieId, cast)
+    return cast
+  } catch {
+    creditsCache.set(movieId, [])
+    return []
+  }
+}
+
+function navTabs(active) {
+  const tabs = [
+    { key: 'all', label: 'All Movies', href: '/' },
+    { key: 'year', label: 'By Release Date', href: '/?view=year' },
+    { key: 'actor', label: 'By Actor', href: '/?view=actor' }
+  ]
+  return `<div class="tabs">${tabs
+    .map((t) => `<a href="${t.href}" class="tab ${active === t.key ? 'tab-active' : ''}">${t.label}</a>`)
+    .join('')}</div>`
+}
+
 function page(body, { narrow } = {}) {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MovieAPP</title>
@@ -107,6 +148,10 @@ function page(body, { narrow } = {}) {
     .error { background:#3a1f22; border:1px solid #6b2b30; color:#ff9d9d; padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:14px; }
     .success { background:#1f3a2a; border:1px solid #2b6b45; color:#9dffb8; padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:14px; }
     .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+    .tabs { display:flex; gap:18px; margin-bottom:20px; border-bottom:1px solid #2a2f3a; }
+    .tab { padding:0 0 10px; color:#8a8f98; text-decoration:none; font-size:14px; font-weight:600; border-bottom:2px solid transparent; }
+    .tab-active { color:#fff; border-bottom-color:#4f9dff; }
+    .actor-card { padding:16px 10px; text-align:center; font-size:13px; font-weight:600; }
   </style>
   </head><body>${body}
   <script>
@@ -219,7 +264,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
     // --- public, unauthenticated routes ---
 
     if (url.pathname === '/login' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(loginPage())
       return
     }
@@ -228,7 +273,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
       const { username, code } = await readBody(req)
       const user = auth.findApprovedUserByUsernameAndCode(store, username, code)
       if (!user) {
-        res.writeHead(200, { 'Content-Type': 'text/html' })
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(loginPage({ error: 'That username/code combination is invalid, expired, or has been revoked.' }))
         return
       }
@@ -248,7 +293,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
     }
 
     if (url.pathname === '/request-access' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(requestAccessPage())
       return
     }
@@ -256,7 +301,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
     if (url.pathname === '/request-access' && req.method === 'POST') {
       const { name, email, message } = await readBody(req)
       if (!name || !name.trim() || !email || !email.trim()) {
-        res.writeHead(200, { 'Content-Type': 'text/html' })
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(requestAccessPage({ error: 'Please enter your name and email.' }))
         return
       }
@@ -275,13 +320,13 @@ function startStreamServer({ getMoviesDir, store, log }) {
           .catch(() => {})
       }
 
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(requestAccessPage({ submitted: true }))
       return
     }
 
     if (url.pathname === '/forgot-code' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(forgotCodePage())
       return
     }
@@ -300,7 +345,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
           .catch(() => {})
       }
       // same response either way, so we don't reveal whether an email has access
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(forgotCodePage({ submitted: true }))
       return
     }
@@ -320,30 +365,76 @@ function startStreamServer({ getMoviesDir, store, log }) {
         movies.map(async (m) => ({ ...m, tmdb: await tmdbLookup(m.fileName, key) }))
       )
 
-      const cards = enriched
-        .map((m) => {
-          const t = m.tmdb
-          const displayName = escapeHtml(t?.title || m.name)
-          const year = t?.release_date?.slice(0, 4) || ''
-          const poster = t?.poster_path
-            ? `<img src="https://image.tmdb.org/t/p/w300${t.poster_path}" alt="${displayName}">`
-            : `<div class="noposter">No poster</div>`
-          return `<a class="card" data-name="${escapeHtml(m.name.toLowerCase())}" href="/watch?id=${encodeURIComponent(m.id)}">
-            ${poster}
-            <div class="meta"><div class="title">${displayName}</div><div class="sub">${year}</div></div>
-          </a>`
-        })
-        .join('')
+      const view = url.searchParams.get('view') || 'all'
+      const actorParam = url.searchParams.get('actor') || ''
 
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      const movieCard = (m) => {
+        const t = m.tmdb
+        const displayName = escapeHtml(t?.title || m.name)
+        const year = t?.release_date?.slice(0, 4) || ''
+        const poster = t?.poster_path
+          ? `<img src="https://image.tmdb.org/t/p/w300${t.poster_path}" alt="${displayName}">`
+          : `<div class="noposter">No poster</div>`
+        return `<a class="card" data-name="${escapeHtml(m.name.toLowerCase())}" href="/watch?id=${encodeURIComponent(m.id)}">
+          ${poster}
+          <div class="meta"><div class="title">${displayName}</div><div class="sub">${year}</div></div>
+        </a>`
+      }
+
+      let body = ''
+
+      if (view === 'year') {
+        const sorted = enriched.slice().sort((a, b) => (b.tmdb?.release_date || '').localeCompare(a.tmdb?.release_date || ''))
+        const groups = new Map()
+        for (const m of sorted) {
+          const year = m.tmdb?.release_date?.slice(0, 4) || 'Unknown year'
+          if (!groups.has(year)) groups.set(year, [])
+          groups.get(year).push(m)
+        }
+        body = Array.from(groups.entries())
+          .map(([year, list]) => `<h3 style="margin:24px 0 10px;">${escapeHtml(year)}</h3><div class="grid">${list.map(movieCard).join('')}</div>`)
+          .join('')
+        if (!enriched.length) body = '<p class="empty">No movies found.</p>'
+      } else if (view === 'actor') {
+        if (!key) {
+          body = '<p class="empty">Add a TMDB key in Settings to browse by actor.</p>'
+        } else {
+          const withCast = await Promise.all(
+            enriched.map(async (m) => ({ ...m, cast: m.tmdb ? await tmdbCredits(m.tmdb.id, key) : [] }))
+          )
+          if (actorParam) {
+            const filtered = withCast.filter((m) => m.cast.includes(actorParam))
+            body = `
+              <a href="/?view=actor" class="muted" style="color:#4f9dff;">← All actors</a>
+              <h3 style="margin:14px 0 10px;">${escapeHtml(actorParam)}</h3>
+              <div class="grid">${filtered.map(movieCard).join('') || '<p class="empty">No movies found.</p>'}</div>
+            `
+          } else {
+            const actorSet = new Set()
+            withCast.forEach((m) => m.cast.forEach((name) => actorSet.add(name)))
+            const actors = Array.from(actorSet).sort((a, b) => a.localeCompare(b))
+            body = `<div class="grid">${
+              actors
+                .map((name) => `<a href="/?view=actor&actor=${encodeURIComponent(name)}" class="card actor-card">${escapeHtml(name)}</a>`)
+                .join('') || '<p class="empty">No cast info found for your library.</p>'
+            }</div>`
+          }
+        }
+      } else {
+        const cards = enriched.map(movieCard).join('')
+        body = `<input id="q" placeholder="Search your library…">
+          <div class="grid">${cards || '<p class="empty">No movies found.</p>'}</div>`
+      }
+
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(
         page(`
         <div class="topbar">
           <h2 style="margin:0;">🎬 MovieAPP</h2>
           <a href="/logout" class="muted" style="color:#8a8f98;">Log out</a>
         </div>
-        <input id="q" placeholder="Search your library…">
-        <div class="grid">${cards || '<p class="empty">No movies found.</p>'}</div>
+        ${navTabs(view)}
+        ${body}
       `)
       )
       return
@@ -371,7 +462,7 @@ function startStreamServer({ getMoviesDir, store, log }) {
         title
       })
 
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(
         `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
         <body style="margin:0;background:#000">

@@ -6,6 +6,8 @@ const history = require('./history')
 const mailer = require('./mailer')
 
 const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.m4v', '.webm']
+const EMULATOR_EXTS = ['.exe']
+const ROM_EXTS = ['.zip', '.iso', '.bin', '.n64', '.z64', '.gba', '.gbc', '.gb', '.nes', '.sfc', '.smc', '.chd', '.cue', '.nds', '.3ds']
 const MIME = {
   mp4: 'video/mp4',
   mkv: 'video/x-matroska',
@@ -49,6 +51,40 @@ function scanMovies(moviesDir) {
       name: path.basename(name, path.extname(name)),
       fileName: name
     }))
+}
+
+// Walks an emulators/games folder recursively, returning files matching the given
+// extensions. relPath is used (instead of an absolute path) so download links never
+// leak or trust a raw filesystem path from the browser.
+function scanEmuDir(dir, exts) {
+  if (!fs.existsSync(dir)) return []
+  const out = []
+  const walk = (d) => {
+    let entries = []
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(d, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+      } else {
+        const ext = path.extname(entry.name).toLowerCase()
+        if (exts.includes(ext)) {
+          out.push({
+            name: path.basename(entry.name, ext),
+            fileName: entry.name,
+            relPath: path.relative(dir, full),
+            size: fs.statSync(full).size
+          })
+        }
+      }
+    }
+  }
+  walk(dir)
+  return out
 }
 
 async function tmdbLookup(fileName, key) {
@@ -105,6 +141,16 @@ async function tmdbCredits(movieId, key) {
     creditsCache.set(movieId, [])
     return []
   }
+}
+
+function sectionNav(active) {
+  const sections = [
+    { key: 'movies', label: '🎬 Movies', href: '/' },
+    { key: 'games', label: '🎮 Games', href: '/games' }
+  ]
+  return `<div class="tabs" style="margin-bottom:8px;">${sections
+    .map((s) => `<a href="${s.href}" class="tab ${active === s.key ? 'tab-active' : ''}" style="font-size:15px;">${s.label}</a>`)
+    .join('')}</div>`
 }
 
 function navTabs(active) {
@@ -247,7 +293,14 @@ function forgotCodePage({ submitted } = {}) {
   )
 }
 
-function startStreamServer({ getMoviesDir, store, log }) {
+function formatBytes(bytes) {
+  if (!bytes) return '0 MB'
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${mb.toFixed(0)} MB`
+}
+
+function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
   const server = http.createServer(async (req, res) => {
     let url
     try {
@@ -434,13 +487,102 @@ function startStreamServer({ getMoviesDir, store, log }) {
       res.end(
         page(`
         <div class="topbar">
-          <h2 style="margin:0;">🎬 MovieAPP</h2>
+          <h2 style="margin:0;">MovieAPP</h2>
           <a href="/logout" class="muted" style="color:#8a8f98;">Log out</a>
         </div>
+        ${sectionNav('movies')}
         ${navTabs(view)}
         ${body}
       `)
       )
+      return
+    }
+
+    if (url.pathname === '/games') {
+      const emuDir = getEmulatorsDir ? getEmulatorsDir() : null
+      const apps = emuDir ? scanEmuDir(emuDir, EMULATOR_EXTS) : []
+      const roms = emuDir ? scanEmuDir(emuDir, ROM_EXTS) : []
+      const ua = req.headers['user-agent'] || ''
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+
+      const banner = isMobile
+        ? `<div class="muted" style="background:#171a21;border-radius:8px;padding:12px 16px;margin-bottom:20px;line-height:1.5;">
+            📱 You're on a phone. The emulator programs below are Windows software and won't run on a phone —
+            you'll need to get a compatible emulator app for your phone from your app store instead. The game
+            files below will work with that phone app once you download them and open them from it.
+          </div>`
+        : `<div class="muted" style="background:#171a21;border-radius:8px;padding:12px 16px;margin-bottom:20px;line-height:1.5;">
+            💻 You're on a computer. Download an emulator below and install it, then download game files and
+            open them with that emulator.
+          </div>`
+
+      const appCards = apps
+        .map(
+          (a) => `<div class="card" style="padding:14px;">
+            <div class="title">${escapeHtml(a.name)}</div>
+            <div class="sub">${formatBytes(a.size)}</div>
+            <a class="btn" style="margin-top:10px;display:inline-block;padding:8px 14px;font-size:13px;"
+               href="/download/emulator?id=${encodeURIComponent(encodeId(a.relPath))}">Download</a>
+          </div>`
+        )
+        .join('')
+
+      const romCards = roms
+        .map(
+          (r) => `<div class="card" style="padding:14px;">
+            <div class="title">${escapeHtml(r.name)}</div>
+            <div class="sub">${escapeHtml(path.extname(r.fileName).slice(1).toUpperCase())} · ${formatBytes(r.size)}</div>
+            <a class="btn" style="margin-top:10px;display:inline-block;padding:8px 14px;font-size:13px;"
+               href="/download/rom?id=${encodeURIComponent(encodeId(r.relPath))}">Download</a>
+          </div>`
+        )
+        .join('')
+
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(
+        page(`
+        <div class="topbar">
+          <h2 style="margin:0;">MovieAPP</h2>
+          <a href="/logout" class="muted" style="color:#8a8f98;">Log out</a>
+        </div>
+        ${sectionNav('games')}
+        ${banner}
+        <h3 style="margin:0 0 10px;">Emulators</h3>
+        <div class="grid">${appCards || '<p class="empty">No emulator apps found.</p>'}</div>
+        <h3 style="margin:28px 0 10px;">Games</h3>
+        <div class="grid">${romCards || '<p class="empty">No game files found.</p>'}</div>
+      `)
+      )
+      return
+    }
+
+    if (url.pathname === '/download/emulator' || url.pathname === '/download/rom') {
+      const id = url.searchParams.get('id') || ''
+      let relPath
+      try {
+        relPath = decodeId(id)
+      } catch {
+        res.writeHead(400)
+        res.end()
+        return
+      }
+      const emuDir = getEmulatorsDir ? getEmulatorsDir() : null
+      const exts = url.pathname === '/download/emulator' ? EMULATOR_EXTS : ROM_EXTS
+      const entries = emuDir ? scanEmuDir(emuDir, exts) : []
+      const match = entries.find((e) => e.relPath === relPath)
+      if (!match) {
+        res.writeHead(404)
+        res.end('Not found')
+        return
+      }
+      const filePath = path.join(emuDir, match.relPath)
+      const stat = fs.statSync(filePath)
+      res.writeHead(200, {
+        'Content-Length': stat.size,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${match.fileName.replace(/"/g, '')}"`
+      })
+      fs.createReadStream(filePath).pipe(res)
       return
     }
 

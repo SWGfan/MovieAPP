@@ -89,6 +89,7 @@ app.whenReady().then(() => {
 
   streamServerInfo = startStreamServer({
     getMoviesDir,
+    getEmulatorsDir,
     store,
     log: (msg) => console.log('[stream]', msg)
   })

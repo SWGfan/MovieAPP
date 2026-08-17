@@ -11,6 +11,7 @@ export default function Movies() {
   const [castLoading, setCastLoading] = useState(false)
   const [actorQuery, setActorQuery] = useState('')
   const [selectedActor, setSelectedActor] = useState(null)
+  const [showActorPhotos, setShowActorPhotos] = useState(true)
 
   const scan = async () => {
     setLoading(true)
@@ -91,14 +92,14 @@ export default function Movies() {
   )
 
   const renderByYear = () => {
-    const sorted = movies.slice().sort((a, b) => (enriched[b.path]?.release_date || '').localeCompare(enriched[a.path]?.release_date || ''))
+    const sorted = filtered.slice().sort((a, b) => (enriched[b.path]?.release_date || '').localeCompare(enriched[a.path]?.release_date || ''))
     const groups = new Map()
     for (const m of sorted) {
       const year = enriched[m.path]?.release_date?.slice(0, 4) || 'Unknown year'
       if (!groups.has(year)) groups.set(year, [])
       groups.get(year).push(m)
     }
-    if (movies.length === 0) return <p className="empty-state">No movies found yet.</p>
+    if (filtered.length === 0) return <p className="empty-state">No movies found.</p>
     return Array.from(groups.entries()).map(([year, list]) => (
       <div key={year}>
         <h3 style={{ fontSize: 15, margin: '20px 0 10px' }}>{year}</h3>
@@ -109,7 +110,7 @@ export default function Movies() {
 
   const renderByActor = () => {
     if (selectedActor) {
-      const inRole = movies.filter((m) => (castByPath[m.path] || []).includes(selectedActor))
+      const inRole = movies.filter((m) => (castByPath[m.path] || []).some((c) => c.name === selectedActor))
       return (
         <>
           <button
@@ -124,32 +125,70 @@ export default function Movies() {
       )
     }
 
-    const actorSet = new Set()
-    movies.forEach((m) => (castByPath[m.path] || []).forEach((name) => actorSet.add(name)))
-    const actors = Array.from(actorSet)
-      .filter((name) => name.toLowerCase().includes(actorQuery.toLowerCase()))
-      .sort((a, b) => a.localeCompare(b))
+    // name -> profilePath (first one seen wins; TMDB returns the same photo for a
+    // given person across movies anyway)
+    const actorMap = new Map()
+    movies.forEach((m) =>
+      (castByPath[m.path] || []).forEach((c) => {
+        if (!actorMap.has(c.name)) actorMap.set(c.name, c.profilePath)
+      })
+    )
+    const actors = Array.from(actorMap.entries())
+      .filter(([name]) => name.toLowerCase().includes(actorQuery.toLowerCase()))
+      .sort((a, b) => a[0].localeCompare(b[0]))
 
     return (
       <>
-        <input
-          placeholder="Search actors…"
-          value={actorQuery}
-          onChange={(e) => setActorQuery(e.target.value)}
-          style={{ width: '100%', marginBottom: 16 }}
-        />
-        {castLoading && actorSet.size === 0 && <p className="empty-state">Looking up cast info…</p>}
-        {!castLoading && actorSet.size === 0 && (
+        <div className="row" style={{ marginBottom: 16 }}>
+          <input
+            placeholder="Search actors…"
+            value={actorQuery}
+            onChange={(e) => setActorQuery(e.target.value)}
+            style={{ flex: 1, marginBottom: 0 }}
+          />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showActorPhotos} onChange={(e) => setShowActorPhotos(e.target.checked)} />
+            Show photos
+          </label>
+        </div>
+        {castLoading && actorMap.size === 0 && <p className="empty-state">Looking up cast info…</p>}
+        {!castLoading && actorMap.size === 0 && (
           <p className="empty-state">No cast info found yet — make sure a TMDB key is set in Settings.</p>
         )}
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
-          {actors.map((name) => (
+          {actors.map(([name, profilePath]) => (
             <div
               key={name}
               className="card"
               style={{ padding: 16, textAlign: 'center', fontSize: 13, fontWeight: 600 }}
               onClick={() => setSelectedActor(name)}
             >
+              {showActorPhotos && (
+                profilePath ? (
+                  <img
+                    src={`https://image.tmdb.org/t/p/w185${profilePath}`}
+                    alt={name}
+                    style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 10px', display: 'block' }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: '50%',
+                      background: '#2a2f3a',
+                      color: 'var(--muted)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 10px',
+                      fontSize: 20
+                    }}
+                  >
+                    {name.charAt(0)}
+                  </div>
+                )
+              )}
               {name}
             </div>
           ))}

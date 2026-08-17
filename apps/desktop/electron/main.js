@@ -212,7 +212,7 @@ ipcMain.handle('tmdb:credits', async (_e, movieId) => {
       return { cast: [] }
     }
     const data = await res.json()
-    const cast = (data.cast || []).slice(0, 8).map((c) => c.name)
+    const cast = (data.cast || []).slice(0, 8).map((c) => ({ name: c.name, profilePath: c.profile_path || null }))
     creditsCache.set(movieId, cast)
     return { cast }
   } catch (err) {

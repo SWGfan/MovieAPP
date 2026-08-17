@@ -293,6 +293,11 @@ function forgotCodePage({ submitted } = {}) {
   )
 }
 
+const HEARTBEAT_SCRIPT = `<script>
+  function moviheartbeat() { fetch('/heartbeat', { method: 'POST', keepalive: true }).catch(() => {}) }
+  setInterval(moviheartbeat, 20000)
+</script>`
+
 function formatBytes(bytes) {
   if (!bytes) return '0 MB'
   const mb = bytes / (1024 * 1024)
@@ -411,6 +416,17 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
       return
     }
 
+    auth.touchLastSeen(store, userId)
+
+    if (url.pathname === '/heartbeat' && req.method === 'POST') {
+      // touchLastSeen above already recorded this; this route just exists so the
+      // browser has something to ping every ~20s while a tab stays open, so
+      // "online" reflects an open tab and not just the last page load.
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
     if (url.pathname === '/') {
       const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
       const movies = scanMovies(getMoviesDir())
@@ -493,6 +509,7 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
         ${sectionNav('movies')}
         ${navTabs(view)}
         ${body}
+        ${HEARTBEAT_SCRIPT}
       `)
       )
       return
@@ -551,6 +568,7 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
         <div class="grid">${appCards || '<p class="empty">No emulator apps found.</p>'}</div>
         <h3 style="margin:28px 0 10px;">Games</h3>
         <div class="grid">${romCards || '<p class="empty">No game files found.</p>'}</div>
+        ${HEARTBEAT_SCRIPT}
       `)
       )
       return

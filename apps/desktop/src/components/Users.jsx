@@ -13,6 +13,13 @@ function watchedSeconds(entry) {
   return Math.max(0, entry.currentTime || 0)
 }
 
+const ONLINE_THRESHOLD_MS = 90 * 1000 // heartbeat pings every 20s, so a couple missed pings still reads online
+
+function isOnline(lastSeenMap, userId) {
+  const seen = lastSeenMap[userId]
+  return !!seen && Date.now() - seen < ONLINE_THRESHOLD_MS
+}
+
 function computeUserStats(entries) {
   const now = Date.now()
   const DAY = 24 * 60 * 60 * 1000
@@ -53,12 +60,16 @@ export default function Users() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [history, setHistory] = useState([])
   const [statsUserId, setStatsUserId] = useState(null)
+  const [lastSeen, setLastSeen] = useState({})
+  const [editingCodeId, setEditingCodeId] = useState(null)
+  const [editingCode, setEditingCode] = useState('')
 
   const refresh = async () => {
     try {
       const data = await window.movieapp.listUsers()
       setUsers(data.users)
       setRequests(data.requests)
+      setLastSeen(data.lastSeen || {})
     } catch (err) {
       setError(`Couldn't load users: ${err?.message || err}`)
     }
@@ -72,6 +83,9 @@ export default function Users() {
 
   useEffect(() => {
     refresh()
+    // Keep the online/offline dots current without the admin having to reload the tab.
+    const interval = setInterval(refresh, 15000)
+    return () => clearInterval(interval)
   }, [])
 
   const toggleStats = (id) => {
@@ -204,6 +218,38 @@ export default function Users() {
     }
   }
 
+  const startEditingCode = (u) => {
+    setError('')
+    setEditingCodeId(u.id)
+    setEditingCode(u.code || '')
+  }
+
+  const cancelEditingCode = () => {
+    setEditingCodeId(null)
+    setEditingCode('')
+  }
+
+  const saveEditingCode = async (id, name, username) => {
+    setError('')
+    if (!editingCode.trim()) {
+      setError('Enter a code — it can be any letters/numbers you want.')
+      return
+    }
+    try {
+      const result = await window.movieapp.setUserCode(id, editingCode.trim())
+      if (!result?.ok) {
+        setError("Couldn't set that code.")
+        return
+      }
+      setEditingCodeId(null)
+      setEditingCode('')
+      setLastCode({ name, username, code: result.code, emailed: result.emailed })
+      await refresh()
+    } catch (err) {
+      setError(`Couldn't set that code: ${err?.message || err}`)
+    }
+  }
+
   return (
     <div style={{ maxWidth: 640 }}>
       <h2>Users</h2>
@@ -243,7 +289,7 @@ export default function Users() {
           <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 4 }}>
             {lastCode.emailed
               ? "Emailed to them automatically — you don't need to do anything else."
-              : "The code won't be shown again (you can always generate a new one below). Add an email notification setup so this gets sent automatically."}
+              : "You can always look this code up again below — it's shown next to their name."}
           </div>
         </div>
       )}
@@ -323,6 +369,17 @@ export default function Users() {
                   </div>
                 ) : (
                   <div style={{ fontWeight: 600 }}>
+                    <span
+                      title={isOnline(lastSeen, u.id) ? 'Online now' : 'Offline'}
+                      style={{
+                        display: 'inline-block',
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        marginRight: 7,
+                        background: isOnline(lastSeen, u.id) ? '#3ddc73' : '#6b6f76'
+                      }}
+                    />
                     {u.name}{' '}
                     <span style={{ fontSize: 11, color: u.status === 'approved' ? '#9dffb8' : '#ff9d9d', fontWeight: 400 }}>
                       {u.status}
@@ -344,6 +401,32 @@ export default function Users() {
                 <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 2 }}>
                   {u.email || 'No email on file'}
                 </div>
+                {editingCodeId === u.id ? (
+                  <div className="row" style={{ marginBottom: 0, marginTop: 6 }}>
+                    <input
+                      value={editingCode}
+                      onChange={(e) => setEditingCode(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveEditingCode(u.id, u.name, u.username)}
+                      placeholder="New code"
+                      style={{ flex: 1, minWidth: 100, marginBottom: 0 }}
+                      autoFocus
+                    />
+                    <button className="primary" onClick={() => saveEditingCode(u.id, u.name, u.username)}>Save</button>
+                    <button onClick={cancelEditingCode} style={{ background: '#2a2f3a', color: '#eee', border: 'none', padding: '8px 14px', borderRadius: 6, cursor: 'pointer' }}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ color: '#8a8f98', fontSize: 12, marginTop: 2 }}>
+                    Code: <span style={{ fontFamily: 'monospace', color: '#eee' }}>{u.code || '— generate one below —'}</span>
+                    <button
+                      onClick={() => startEditingCode(u)}
+                      style={{ marginLeft: 8, background: 'none', border: 'none', color: '#8a8f98', cursor: 'pointer', fontSize: 11, textDecoration: 'underline' }}
+                    >
+                      change code
+                    </button>
+                  </div>
+                )}
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: '#c7cad1', cursor: 'pointer' }}>
                   <input
                     type="checkbox"

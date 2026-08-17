@@ -98,6 +98,9 @@ function createUser(store, name, email) {
     name: name?.trim() || 'Unnamed',
     username,
     email: (email || '').trim().toLowerCase(),
+    code, // kept in plain text so the admin can always look it up again (this is a
+    // private home-server PIN, not a real account password — trade-off made on
+    // purpose so you never have to reset it blind)
     codeHash: hashCode(code),
     status: 'approved',
     isAdmin: false,
@@ -142,7 +145,17 @@ function reactivateUser(store, userId) {
 
 function regenerateCode(store, userId) {
   const code = generateCode()
-  const users = getUsers(store).map((u) => (u.id === userId ? { ...u, codeHash: hashCode(code) } : u))
+  const users = getUsers(store).map((u) => (u.id === userId ? { ...u, code, codeHash: hashCode(code) } : u))
+  setUsers(store, users)
+  return code
+}
+
+// Admin sets a specific code for a user (the "change password" action) instead of
+// a random one. Returns the normalized code that was actually saved.
+function setUserCode(store, userId, rawCode) {
+  const code = normalizeCode(rawCode)
+  if (!code) return null
+  const users = getUsers(store).map((u) => (u.id === userId ? { ...u, code, codeHash: hashCode(code) } : u))
   setUsers(store, users)
   return code
 }
@@ -199,6 +212,20 @@ function findApprovedUserByUsernameAndCode(store, username, code) {
   return getUsers(store).find((u) => u.username === uname && u.codeHash === hash && u.status === 'approved') || null
 }
 
+// --- presence (best-effort "online now" indicator, driven by requests from the
+// public site — page loads, video-progress pings, and a small heartbeat while a
+// tab is open) ---
+
+function touchLastSeen(store, userId) {
+  const seen = store.get('userLastSeen') || {}
+  seen[userId] = Date.now()
+  store.set('userLastSeen', seen)
+}
+
+function getLastSeenMap(store) {
+  return store.get('userLastSeen') || {}
+}
+
 function isUserApproved(store, userId) {
   const u = getUsers(store).find((x) => x.id === userId)
   return !!u && u.status === 'approved'
@@ -250,6 +277,9 @@ module.exports = {
   setUserAdmin,
   renameUser,
   setUserEmail,
+  setUserCode,
+  touchLastSeen,
+  getLastSeenMap,
   regenerateCode,
   submitAccessRequest,
   approveRequest,

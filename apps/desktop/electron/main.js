@@ -198,7 +198,8 @@ ipcMain.handle('remote:getAccessInfo', () => {
 
 ipcMain.handle('auth:list', () => ({
   users: auth.getUsers(store),
-  requests: auth.getRequests(store).filter((r) => r.status === 'pending')
+  requests: auth.getRequests(store).filter((r) => r.status === 'pending'),
+  lastSeen: auth.getLastSeenMap(store)
 }))
 
 async function emailCodeIfPossible(user, code) {
@@ -274,6 +275,14 @@ ipcMain.handle('auth:renameUser', (_e, { userId, name } = {}) => {
 ipcMain.handle('auth:setUserEmail', (_e, { userId, email } = {}) => {
   auth.setUserEmail(store, userId, email)
   return true
+})
+
+ipcMain.handle('auth:setUserCode', async (_e, { userId, code } = {}) => {
+  const newCode = auth.setUserCode(store, userId, code)
+  if (!newCode) return { ok: false, error: 'empty_code' }
+  const user = auth.getUsers(store).find((u) => u.id === userId)
+  const emailed = user ? await emailCodeIfPossible(user, newCode) : false
+  return { ok: true, code: newCode, emailed }
 })
 
 ipcMain.handle('history:list', () => {

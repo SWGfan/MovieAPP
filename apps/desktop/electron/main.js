@@ -184,6 +184,37 @@ ipcMain.handle('tmdb:search', async (_e, query) => {
   }
 })
 
+const creditsCache = new Map()
+
+ipcMain.handle('tmdb:credits', async (_e, movieId) => {
+  if (!movieId) return { cast: [] }
+  if (creditsCache.has(movieId)) return { cast: creditsCache.get(movieId) }
+
+  const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
+  if (!key) return { cast: [] }
+  const isV4Token = key.split('.').length === 3
+  const url = isV4Token
+    ? `https://api.themoviedb.org/3/movie/${movieId}/credits`
+    : `https://api.themoviedb.org/3/movie/${movieId}/credits?api_key=${key}`
+
+  try {
+    const res = await fetch(url, {
+      headers: isV4Token ? { Authorization: `Bearer ${key}`, accept: 'application/json' } : { accept: 'application/json' }
+    })
+    if (!res.ok) {
+      creditsCache.set(movieId, [])
+      return { cast: [] }
+    }
+    const data = await res.json()
+    const cast = (data.cast || []).slice(0, 8).map((c) => c.name)
+    creditsCache.set(movieId, cast)
+    return { cast }
+  } catch (err) {
+    creditsCache.set(movieId, [])
+    return { cast: [], error: String(err) }
+  }
+})
+
 ipcMain.handle('remote:getAccessInfo', () => {
   const addresses = getNetworkAddresses()
   const port = streamServerInfo?.port || STREAM_PORT

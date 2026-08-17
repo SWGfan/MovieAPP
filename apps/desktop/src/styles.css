@@ -87,3 +87,25 @@ button.primary {
 }
 
 .row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+
+.sticky-bar {
+  position: sticky;
+  top: -24px;
+  margin: -24px -24px 16px;
+  padding: 24px 24px 16px;
+  background: var(--bg);
+  z-index: 5;
+}
+
+.subtabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.subtab {
+  background: none;
+  border: 1px solid #2a2f3a;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.subtab:hover { color: var(--text); }
+.subtab.active { background: var(--accent); border-color: var(--accent); color: #fff; }

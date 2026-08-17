@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('movieapp', {
   launchEmulator: (emulatorPath, romPath) => ipcRenderer.invoke('emulators:launch', { emulatorPath, romPath }),
 
   tmdbSearch: (query) => ipcRenderer.invoke('tmdb:search', query),
+  tmdbCredits: (movieId) => ipcRenderer.invoke('tmdb:credits', movieId),
 
   getRemoteAccessInfo: () => ipcRenderer.invoke('remote:getAccessInfo'),
 

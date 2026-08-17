@@ -38,9 +38,25 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .nav-btn:hover { background: #22262f; }
 .nav-btn.active { background: var(--accent); color: #fff; }
+
+.nav-count {
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
+.nav-btn.active .nav-count { background: rgba(255, 255, 255, 0.28); }
 
 .main { flex: 1; padding: 24px; overflow-y: auto; }
 

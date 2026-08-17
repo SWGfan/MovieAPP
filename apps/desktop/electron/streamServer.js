@@ -4,6 +4,10 @@ const path = require('path')
 const auth = require('./auth')
 const history = require('./history')
 const mailer = require('./mailer')
+// on-disk TMDB cache shared with the desktop app's offline prefetch — lets the
+// website itself run with zero internet once that cache is populated. Named
+// tmdbFileCache locally to avoid colliding with the in-memory tmdbCache Map below.
+const tmdbFileCache = require('./tmdbCache')
 
 const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.m4v', '.webm']
 const EMULATOR_EXTS = ['.exe']
@@ -24,6 +28,8 @@ const SESSION_COOKIE = 'movieapp_session'
 const tmdbCache = new Map()
 // in-memory cache of TMDB movie id -> top cast names
 const creditsCache = new Map()
+// in-memory cache of show key -> TMDB tv result (or null if no match)
+const tvCache = new Map()
 
 function encodeId(fileName) {
   return Buffer.from(fileName, 'utf8').toString('base64url')
@@ -87,7 +93,172 @@ function scanEmuDir(dir, exts) {
   return out
 }
 
-async function tmdbLookup(fileName, key) {
+const ALPHABET = ['#', ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('')]
+
+function alphabetBarTop(availableLetters) {
+  return `<div style="position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;background:#171a21;border-radius:8px;margin-bottom:16px;box-shadow:0 4px 8px rgba(0,0,0,0.4);">${ALPHABET.map(
+    (letter) =>
+      availableLetters.has(letter)
+        ? `<a href="#letter-${letter}" style="color:#eee;font-size:12px;font-weight:600;padding:3px 6px;border-radius:4px;text-decoration:none;">${letter}</a>`
+        : `<span style="color:#4a4f58;font-size:12px;font-weight:600;padding:3px 6px;">${letter}</span>`
+  ).join('')}</div>`
+}
+
+function alphabetRailSide(availableLetters) {
+  return `<div style="position:sticky;top:100px;align-self:flex-start;display:flex;flex-direction:column;align-items:center;gap:1px;padding:6px 4px;background:#171a21;border-radius:8px;flex-shrink:0;font-size:11px;font-weight:600;">${ALPHABET.map(
+    (letter) =>
+      availableLetters.has(letter)
+        ? `<a href="#letter-${letter}" style="color:#eee;text-decoration:none;padding:1px 4px;">${letter}</a>`
+        : `<span style="color:#4a4f58;padding:1px 4px;">${letter}</span>`
+  ).join('')}</div>`
+}
+
+function posterUrl(cacheDir, movieId, posterPath) {
+  if (cacheDir && tmdbFileCache.localPosterPath(cacheDir, movieId)) return `/media/poster/${movieId}.jpg`
+  return posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : null
+}
+
+function actorPhotoUrl(cacheDir, personId, profilePath) {
+  if (cacheDir && tmdbFileCache.localActorPhotoPath(cacheDir, personId)) return `/media/actor/${personId}.jpg`
+  return profilePath ? `https://image.tmdb.org/t/p/w185${profilePath}` : null
+}
+
+// Parses show/season/episode out of a filename — mirrors the desktop app's parser
+// so both sides group the same messy filenames the same way. Handles S01E01,
+// 1x01, and "Season 1 Episode 1" styles, strips scene-release numeric ID
+// prefixes ("4574334-stranger-things-2016...") and quality tags (1080p etc);
+// anything else becomes its own single-item "show" named after the cleaned
+// filename.
+function cleanText(raw) {
+  return raw.replace(/[._-]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function stripLeadingId(raw) {
+  return raw.replace(/^\d{4,}[\s._-]+/, '')
+}
+
+function extractTrailingYear(raw) {
+  const m = raw.match(/^(.*?)[\s._-]*((?:19|20)\d{2})[\s._-]*$/)
+  if (!m) return { rest: raw, year: null }
+  return { rest: m[1], year: m[2] }
+}
+
+const QUALITY_TAG = /^(480p|540p|720p|1080p|1440p|2160p|4k|hdr|hdr10|sdr|web[\s-]?dl|bluray|x264|x265|hevc)$/i
+
+function parseEpisode(fileName) {
+  const noExt = fileName.replace(/\.[^./\\]+$/, '')
+
+  let m = noExt.match(/^(.*?)[.\s_-]+[Ss](\d{1,2})[.\s_-]*[Ee](\d{1,3})(.*)$/)
+  if (!m) m = noExt.match(/^(.*?)[.\s_-]+(\d{1,2})x(\d{1,3})(.*)$/)
+  if (!m) m = noExt.match(/^(.*?)[.\s_-]+[Ss]eason[.\s_-]?(\d{1,2})[.\s_-]+[Ee]pisode[.\s_-]?(\d{1,3})(.*)$/i)
+
+  if (m) {
+    const rawShow = stripLeadingId(m[1])
+    const { rest, year } = extractTrailingYear(rawShow)
+    const show = cleanText(rest) || cleanText(rawShow) || noExt
+    const season = parseInt(m[2], 10)
+    const episode = parseInt(m[3], 10)
+    let extra = cleanText(m[4] || '').replace(/^[-\s]+/, '')
+    if (QUALITY_TAG.test(extra)) extra = ''
+    return { show, year, season, episode, episodeTitle: extra || null }
+  }
+
+  const rawShow = stripLeadingId(noExt)
+  const { rest, year } = extractTrailingYear(rawShow)
+  const show = cleanText(rest) || cleanText(rawShow) || noExt
+  return { show, year, season: null, episode: null, episodeTitle: null }
+}
+
+// Files nested in a Show/Season/episode.ext structure get grouped by their
+// top-level folder name (far more reliable than parsing every messy filename —
+// it also naturally merges a show whose episodes were named inconsistently
+// across seasons). Flat files sitting directly in the TV Shows root fall back
+// to filename parsing entirely.
+function groupKeyAndName(relPath, fileName) {
+  const parts = relPath.split(/[\\/]/).filter(Boolean)
+  if (parts.length > 1) {
+    const folderName = parts[0]
+    const { rest, year } = extractTrailingYear(stripLeadingId(folderName))
+    return { show: cleanText(rest) || folderName.trim(), year }
+  }
+  const parsed = parseEpisode(fileName)
+  return { show: parsed.show, year: parsed.year }
+}
+
+function scanTvShows(dir) {
+  return scanEmuDir(dir, VIDEO_EXTS)
+}
+
+async function tvSearchOnce(query, year, key, isV4Token) {
+  const yearParam = year ? `&first_air_date_year=${encodeURIComponent(year)}` : ''
+  const url = isV4Token
+    ? `https://api.themoviedb.org/3/search/tv?query=${encodeURIComponent(query)}${yearParam}`
+    : `https://api.themoviedb.org/3/search/tv?api_key=${key}&query=${encodeURIComponent(query)}${yearParam}`
+  const res = await fetch(url, {
+    headers: isV4Token ? { Authorization: `Bearer ${key}`, accept: 'application/json' } : { accept: 'application/json' }
+  })
+  if (!res.ok) return { ok: false }
+  const data = await res.json()
+  return { ok: true, match: data.results?.[0] || null }
+}
+
+// Tries a few query variations before giving up — folder names aren't always
+// clean enough to match on the first attempt (e.g. a folder literally named
+// "Survivor 50" won't match TMDB's "Survivor" until the trailing number is
+// stripped).
+async function searchTvSmart(query, year, key, isV4Token) {
+  const r1 = await tvSearchOnce(query, year, key, isV4Token)
+  if (!r1.ok) return r1
+  if (r1.match) return r1
+
+  if (year) {
+    const r2 = await tvSearchOnce(query, null, key, isV4Token)
+    if (!r2.ok) return r2
+    if (r2.match) return r2
+  }
+
+  const trailingNum = query.match(/^(.*?)\s+\d{1,3}$/)
+  if (trailingNum) {
+    const r3 = await tvSearchOnce(trailingNum[1], year, key, isV4Token)
+    if (r3.ok && r3.match) return r3
+  }
+
+  return { ok: true, match: null }
+}
+
+async function tmdbLookupTv(showName, showKey, key, cacheDir, year) {
+  if (cacheDir) {
+    const manifest = tmdbFileCache.getTvManifest(cacheDir)
+    if (showKey in manifest) return manifest[showKey]
+  }
+  if (tvCache.has(showKey)) return tvCache.get(showKey)
+  if (!key) return null
+
+  const isV4Token = key.split('.').length === 3
+
+  try {
+    const result = await searchTvSmart(showName, year, key, isV4Token)
+    const match = result.ok ? result.match : null
+    tvCache.set(showKey, match)
+    return match
+  } catch {
+    tvCache.set(showKey, null)
+    return null
+  }
+}
+
+function tvPosterUrl(cacheDir, showId, posterPath) {
+  if (cacheDir && tmdbFileCache.localTvPosterPath(cacheDir, showId)) return `/media/poster-tv/${showId}.jpg`
+  return posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : null
+}
+
+async function tmdbLookup(fileName, key, cacheDir) {
+  // On-disk cache first (populated by the desktop app's "Download all TMDB info
+  // for offline use" button) — this is what lets the site run with no internet.
+  if (cacheDir) {
+    const manifest = tmdbFileCache.getManifest(cacheDir)
+    if (fileName in manifest) return manifest[fileName]
+  }
   if (tmdbCache.has(fileName)) return tmdbCache.get(fileName)
   if (!key) return null
 
@@ -115,8 +286,12 @@ async function tmdbLookup(fileName, key) {
   }
 }
 
-async function tmdbCredits(movieId, key) {
+async function tmdbCredits(movieId, key, cacheDir) {
   if (!movieId) return []
+  if (cacheDir) {
+    const creditsMap = tmdbFileCache.getCreditsMap(cacheDir)
+    if (movieId in creditsMap) return creditsMap[movieId]
+  }
   if (creditsCache.has(movieId)) return creditsCache.get(movieId)
   if (!key) return []
 
@@ -134,7 +309,7 @@ async function tmdbCredits(movieId, key) {
       return []
     }
     const data = await res.json()
-    const cast = (data.cast || []).slice(0, 8).map((c) => c.name)
+    const cast = (data.cast || []).slice(0, 8).map((c) => ({ id: c.id, name: c.name, profilePath: c.profile_path || null }))
     creditsCache.set(movieId, cast)
     return cast
   } catch {
@@ -146,7 +321,8 @@ async function tmdbCredits(movieId, key) {
 function sectionNav(active) {
   const sections = [
     { key: 'movies', label: '🎬 Movies', href: '/' },
-    { key: 'games', label: '🎮 Games', href: '/games' }
+    { key: 'games', label: '🎮 Games', href: '/games' },
+    { key: 'tvshows', label: '📺 TV Shows', href: '/tvshows' }
   ]
   return `<div class="tabs" style="margin-bottom:8px;">${sections
     .map((s) => `<a href="${s.href}" class="tab ${active === s.key ? 'tab-active' : ''}" style="font-size:15px;">${s.label}</a>`)
@@ -210,6 +386,14 @@ function page(body, { narrow } = {}) {
         })
       })
     }
+    // Pressing a letter key jumps straight to that A-Z section (ignored while typing).
+    document.addEventListener('keydown', (e) => {
+      const tag = e.target && e.target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return
+      const el = document.getElementById('letter-' + e.key.toUpperCase())
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   </script>
   </body></html>`
 }
@@ -383,7 +567,7 @@ function findLatestInstaller(dir) {
   return path.join(dir, withStats[0].f)
 }
 
-function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, store, log }) {
+function startStreamServer({ getMoviesDir, getEmulatorsDir, getTvShowsDir, getViewerAppDir, getTmdbCacheDir, store, log }) {
   const server = http.createServer(async (req, res) => {
     let url
     try {
@@ -414,6 +598,32 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, sto
         'Content-Disposition': 'attachment; filename="MovieAPP-Viewer-Setup.exe"'
       })
       fs.createReadStream(exe).pipe(res)
+      return
+    }
+
+    if (
+      url.pathname.startsWith('/media/poster/') ||
+      url.pathname.startsWith('/media/actor/') ||
+      url.pathname.startsWith('/media/poster-tv/')
+    ) {
+      const cacheDir = getTmdbCacheDir ? getTmdbCacheDir() : null
+      const isActor = url.pathname.startsWith('/media/actor/')
+      const isTv = url.pathname.startsWith('/media/poster-tv/')
+      const idPart = path.basename(url.pathname).replace(/\.jpg$/, '')
+      const file = cacheDir
+        ? isActor
+          ? tmdbFileCache.localActorPhotoPath(cacheDir, idPart)
+          : isTv
+          ? tmdbFileCache.localTvPosterPath(cacheDir, idPart)
+          : tmdbFileCache.localPosterPath(cacheDir, idPart)
+        : null
+      if (!file) {
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=604800' })
+      fs.createReadStream(file).pipe(res)
       return
     }
 
@@ -525,64 +735,107 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, sto
 
     if (url.pathname === '/') {
       const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
+      const cacheDir = getTmdbCacheDir ? getTmdbCacheDir() : null
       const movies = scanMovies(getMoviesDir())
-      const enriched = await Promise.all(
-        movies.map(async (m) => ({ ...m, tmdb: await tmdbLookup(m.fileName, key) }))
+      const enrichedRaw = await Promise.all(
+        movies.map(async (m) => ({ ...m, tmdb: await tmdbLookup(m.fileName, key, cacheDir) }))
       )
+      const titleOf = (m) => m.tmdb?.title || m.name
+      const enriched = enrichedRaw
+        .slice()
+        .sort((a, b) => titleOf(a).localeCompare(titleOf(b), undefined, { sensitivity: 'base' }))
 
       const view = url.searchParams.get('view') || 'all'
       const actorParam = url.searchParams.get('actor') || ''
 
-      const movieCard = (m) => {
+      const movieCard = (m, anchorId) => {
         const t = m.tmdb
         const displayName = escapeHtml(t?.title || m.name)
         const year = t?.release_date?.slice(0, 4) || ''
-        const poster = t?.poster_path
-          ? `<img src="https://image.tmdb.org/t/p/w300${t.poster_path}" alt="${displayName}">`
+        const posterSrc = t ? posterUrl(cacheDir, t.id, t.poster_path) : null
+        const poster = posterSrc
+          ? `<img src="${posterSrc}" alt="${displayName}">`
           : `<div class="noposter">No poster</div>`
-        return `<a class="card" data-name="${escapeHtml(m.name.toLowerCase())}" href="/watch?id=${encodeURIComponent(m.id)}">
+        return `<a class="card"${anchorId ? ` id="${anchorId}"` : ''} data-name="${escapeHtml(m.name.toLowerCase())}" href="/watch?id=${encodeURIComponent(m.id)}">
           ${poster}
           <div class="meta"><div class="title">${displayName}</div><div class="sub">${year}</div></div>
         </a>`
       }
 
+      const letterOf = (m) => {
+        const ch = titleOf(m).charAt(0).toUpperCase()
+        return /[A-Z]/.test(ch) ? ch : '#'
+      }
+
       let body = ''
 
       if (view === 'year') {
-        const sorted = enriched.slice().sort((a, b) => (b.tmdb?.release_date || '').localeCompare(a.tmdb?.release_date || ''))
-        const groups = new Map()
-        for (const m of sorted) {
-          const year = m.tmdb?.release_date?.slice(0, 4) || 'Unknown year'
-          if (!groups.has(year)) groups.set(year, [])
-          groups.get(year).push(m)
+        if (!enriched.length) {
+          body = '<p class="empty">No movies found.</p>'
+        } else {
+          const sorted = enriched.slice().sort((a, b) => {
+            const yearDiff = (b.tmdb?.release_date || '').localeCompare(a.tmdb?.release_date || '')
+            return yearDiff !== 0 ? yearDiff : titleOf(a).localeCompare(titleOf(b), undefined, { sensitivity: 'base' })
+          })
+          const groups = new Map()
+          for (const m of sorted) {
+            const year = m.tmdb?.release_date?.slice(0, 4) || 'Unknown year'
+            if (!groups.has(year)) groups.set(year, [])
+            groups.get(year).push(m)
+          }
+          // Tag the first movie for each letter (in on-page order, across all years)
+          // with an anchor id so the side rail can jump straight to it.
+          const seenLetters = new Set()
+          const availableLetters = new Set(sorted.map(letterOf))
+          const sections = Array.from(groups.entries())
+            .map(([year, list]) => {
+              const cards = list
+                .map((m) => {
+                  const letter = letterOf(m)
+                  let anchorId
+                  if (!seenLetters.has(letter)) {
+                    seenLetters.add(letter)
+                    anchorId = `letter-${letter}`
+                  }
+                  return movieCard(m, anchorId)
+                })
+                .join('')
+              return `<h3 style="margin:24px 0 10px;">${escapeHtml(year)}</h3><div class="grid">${cards}</div>`
+            })
+            .join('')
+          body = `<div style="display:flex;gap:8px;">
+            <div style="flex:1;min-width:0;">${sections}</div>
+            ${alphabetRailSide(availableLetters)}
+          </div>`
         }
-        body = Array.from(groups.entries())
-          .map(([year, list]) => `<h3 style="margin:24px 0 10px;">${escapeHtml(year)}</h3><div class="grid">${list.map(movieCard).join('')}</div>`)
-          .join('')
-        if (!enriched.length) body = '<p class="empty">No movies found.</p>'
       } else if (view === 'actor') {
         if (!key) {
           body = '<p class="empty">Add a TMDB key in Settings to browse by actor.</p>'
         } else {
           const withCast = await Promise.all(
-            enriched.map(async (m) => ({ ...m, cast: m.tmdb ? await tmdbCredits(m.tmdb.id, key) : [] }))
+            enriched.map(async (m) => ({ ...m, cast: m.tmdb ? await tmdbCredits(m.tmdb.id, key, cacheDir) : [] }))
           )
           if (actorParam) {
-            const filtered = withCast.filter((m) => m.cast.includes(actorParam))
+            const filtered = withCast.filter((m) => m.cast.some((c) => c.name === actorParam))
             body = `
               <a href="/?view=actor" class="muted" style="color:#4f9dff;">← All actors</a>
               <h3 style="margin:14px 0 10px;">${escapeHtml(actorParam)}</h3>
               <div class="grid">${filtered.map(movieCard).join('') || '<p class="empty">No movies found.</p>'}</div>
             `
           } else {
-            const actorSet = new Set()
-            withCast.forEach((m) => m.cast.forEach((name) => actorSet.add(name)))
-            const actors = Array.from(actorSet).sort((a, b) => a.localeCompare(b))
+            const actorMap = new Map()
+            withCast.forEach((m) => m.cast.forEach((c) => {
+              if (!actorMap.has(c.name)) actorMap.set(c.name, c)
+            }))
+            const actors = Array.from(actorMap.values()).sort((a, b) => a.name.localeCompare(b.name))
             const actorCards = actors
-              .map(
-                (name) =>
-                  `<a href="/?view=actor&actor=${encodeURIComponent(name)}" class="card actor-card" data-name="${escapeHtml(name.toLowerCase())}">${escapeHtml(name)}</a>`
-              )
+              .map((c) => {
+                const photoSrc = actorPhotoUrl(cacheDir, c.id, c.profilePath)
+                const photo = photoSrc
+                  ? `<img src="${photoSrc}" alt="${escapeHtml(c.name)}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin:0 auto 10px;display:block;">`
+                  : `<div style="width:64px;height:64px;border-radius:50%;background:#2a2f3a;color:#8a8f98;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;font-size:20px;">${escapeHtml(c.name.charAt(0))}</div>`
+                return `<a href="/?view=actor&actor=${encodeURIComponent(c.name)}" class="card actor-card" data-name="${escapeHtml(c.name.toLowerCase())}">${photo}${escapeHtml(c.name)}</a>`
+              })
               .join('')
             body = actors.length
               ? `<input id="q" placeholder="Search actors…"><div class="grid">${actorCards}</div>`
@@ -590,9 +843,28 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, sto
           }
         }
       } else {
-        const cards = enriched.map(movieCard).join('')
-        body = `<input id="q" placeholder="Search your library…">
-          <div class="grid">${cards || '<p class="empty">No movies found.</p>'}</div>`
+        if (!enriched.length) {
+          body = `<input id="q" placeholder="Search your library…"><p class="empty">No movies found.</p>`
+        } else {
+          const letterGroups = new Map()
+          enriched.forEach((m) => {
+            const letter = letterOf(m)
+            if (!letterGroups.has(letter)) letterGroups.set(letter, [])
+            letterGroups.get(letter).push(m)
+          })
+          const availableLetters = new Set(letterGroups.keys())
+          const sections = Array.from(letterGroups.entries())
+            .map(
+              ([letter, list]) =>
+                `<div id="letter-${letter}"><h3 style="margin:20px 0 10px;">${letter}</h3><div class="grid">${list
+                  .map((m) => movieCard(m))
+                  .join('')}</div></div>`
+            )
+            .join('')
+          body = `<input id="q" placeholder="Search your library…">
+            ${alphabetBarTop(availableLetters)}
+            ${sections}`
+        }
       }
 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -671,6 +943,224 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, sto
       return
     }
 
+    if (url.pathname === '/tvshows') {
+      const tvDir = getTvShowsDir ? getTvShowsDir() : null
+      const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
+      const cacheDir = getTmdbCacheDir ? getTmdbCacheDir() : null
+      const files = tvDir ? scanTvShows(tvDir) : []
+
+      const showMap = new Map()
+      files.forEach((f) => {
+        const { show: showName, year } = groupKeyAndName(f.relPath, f.fileName)
+        const parsed = parseEpisode(f.fileName)
+        const showKey = encodeId(showName.toLowerCase())
+        if (!showMap.has(showKey)) showMap.set(showKey, { key: showKey, name: showName, year, episodes: [] })
+        showMap
+          .get(showKey)
+          .episodes.push({ season: parsed.season, episode: parsed.episode, episodeTitle: parsed.episodeTitle, relPath: f.relPath, fileName: f.fileName })
+      })
+
+      const showParam = url.searchParams.get('show') || ''
+
+      if (showParam && showMap.has(showParam)) {
+        const show = showMap.get(showParam)
+        const meta = await tmdbLookupTv(show.name, showParam, key, cacheDir, show.year)
+
+        const seasons = new Map()
+        show.episodes.forEach((ep) => {
+          const seasonKey = ep.season === null ? 'Unsorted' : `Season ${String(ep.season).padStart(2, '0')}`
+          if (!seasons.has(seasonKey)) seasons.set(seasonKey, [])
+          seasons.get(seasonKey).push(ep)
+        })
+        const sortedSeasonKeys = Array.from(seasons.keys()).sort((a, b) => {
+          if (a === 'Unsorted') return 1
+          if (b === 'Unsorted') return -1
+          return a.localeCompare(b)
+        })
+        sortedSeasonKeys.forEach((k) => seasons.get(k).sort((a, b) => (a.episode ?? 999) - (b.episode ?? 999)))
+
+        const seasonSections = sortedSeasonKeys
+          .map((seasonKey) => {
+            const rows = seasons
+              .get(seasonKey)
+              .map(
+                (ep) => `<a class="card" style="display:flex;align-items:center;padding:10px 14px;text-decoration:none;color:inherit;margin-bottom:6px;"
+                  href="/tvwatch?id=${encodeURIComponent(encodeId(ep.relPath))}">
+                  <span class="sub" style="min-width:60px;">${ep.episode !== null ? `Ep ${ep.episode}` : '—'}</span>
+                  <span class="title">${escapeHtml(ep.episodeTitle || ep.fileName)}</span>
+                </a>`
+              )
+              .join('')
+            return `<h4 style="font-size:14px;margin:0 0 10px;color:#8a8f98;">${escapeHtml(seasonKey)}</h4>
+              <div style="display:flex;flex-direction:column;">${rows}</div>`
+          })
+          .join('<div style="height:20px;"></div>')
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(
+          page(`
+          <div class="topbar">
+            <h2 style="margin:0;">MovieAPP</h2>
+            <a href="/logout" class="muted" style="color:#8a8f98;">Log out</a>
+          </div>
+          ${sectionNav('tvshows')}
+          <a href="/tvshows" class="muted" style="color:#4f9dff;">← All shows</a>
+          <h3 style="margin:14px 0 4px;">${escapeHtml(meta?.name || show.name)}</h3>
+          ${meta?.overview ? `<p class="muted" style="max-width:640px;line-height:1.5;margin:0 0 16px;">${escapeHtml(meta.overview)}</p>` : ''}
+          ${seasonSections}
+          ${HEARTBEAT_SCRIPT}
+        `)
+        )
+        return
+      }
+
+      const shows = Array.from(showMap.values()).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      const letterGroups = new Map()
+      shows.forEach((s) => {
+        const ch = s.name.charAt(0).toUpperCase()
+        const letter = /[A-Z]/.test(ch) ? ch : '#'
+        if (!letterGroups.has(letter)) letterGroups.set(letter, [])
+        letterGroups.get(letter).push(s)
+      })
+      const availableLetters = new Set(letterGroups.keys())
+
+      const showCardsFor = async (list) =>
+        (
+          await Promise.all(
+            list.map(async (s) => {
+              const meta = await tmdbLookupTv(s.name, s.key, key, cacheDir, s.year)
+              const posterSrc = meta ? tvPosterUrl(cacheDir, meta.id, meta.poster_path) : null
+              const poster = posterSrc
+                ? `<img src="${posterSrc}" alt="${escapeHtml(s.name)}">`
+                : `<div class="noposter">No poster</div>`
+              const year = meta?.first_air_date?.slice(0, 4) || ''
+              return `<a class="card" data-name="${escapeHtml(s.name.toLowerCase())}" href="/tvshows?show=${encodeURIComponent(s.key)}">
+                ${poster}
+                <div class="meta">
+                  <div class="title">${escapeHtml(meta?.name || s.name)}</div>
+                  <div class="sub">${s.episodes.length} episode${s.episodes.length === 1 ? '' : 's'}${year ? ` · ${year}` : ''}</div>
+                </div>
+              </a>`
+            })
+          )
+        ).join('')
+
+      let sections = ''
+      if (shows.length) {
+        const sectionParts = []
+        for (const [letter, list] of letterGroups) {
+          sectionParts.push(`<div id="letter-${letter}"><h3 style="margin:20px 0 10px;">${letter}</h3><div class="grid">${await showCardsFor(list)}</div></div>`)
+        }
+        sections = sectionParts.join('')
+      }
+
+      const body = shows.length
+        ? `<input id="q" placeholder="Search your TV shows…">${alphabetBarTop(availableLetters)}${sections}`
+        : `<input id="q" placeholder="Search your TV shows…"><p class="empty">No TV shows found.</p>`
+
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(
+        page(`
+        <div class="topbar">
+          <h2 style="margin:0;">MovieAPP</h2>
+          <a href="/logout" class="muted" style="color:#8a8f98;">Log out</a>
+        </div>
+        ${sectionNav('tvshows')}
+        ${body}
+        ${HEARTBEAT_SCRIPT}
+      `)
+      )
+      return
+    }
+
+    if (url.pathname === '/tvwatch') {
+      const id = url.searchParams.get('id') || ''
+      let relPath = ''
+      try {
+        relPath = decodeId(id)
+      } catch {
+        relPath = ''
+      }
+
+      const users = auth.getUsers(store)
+      const user = users.find((u) => u.id === userId)
+      const parsed = relPath ? parseEpisode(path.basename(relPath)) : null
+      const title = parsed ? `${parsed.show}${parsed.season !== null ? ` — S${parsed.season}E${parsed.episode}` : ''}` : 'Unknown'
+
+      const sessionId = history.startSession(store, {
+        userId,
+        userName: user?.name || 'Unknown',
+        fileName: relPath,
+        title
+      })
+
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(
+        `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="margin:0;background:#000">
+        <video id="v" src="/tvfile?id=${encodeURIComponent(id)}" controls autoplay playsinline style="width:100%;height:100vh"></video>
+        <script>
+          const v = document.getElementById('v')
+          const sessionId = ${JSON.stringify(sessionId)}
+          function report() {
+            const body = JSON.stringify({ sessionId, currentTime: v.currentTime || 0, duration: v.duration || 0 })
+            if (navigator.sendBeacon) {
+              navigator.sendBeacon('/progress', new Blob([body], { type: 'application/json' }))
+            } else {
+              fetch('/progress', { method: 'POST', body, headers: { 'Content-Type': 'application/json' }, keepalive: true })
+            }
+          }
+          setInterval(report, 15000)
+          v.addEventListener('pause', report)
+          v.addEventListener('ended', report)
+          window.addEventListener('pagehide', report)
+        </script>
+        </body></html>`
+      )
+      return
+    }
+
+    if (url.pathname === '/tvfile') {
+      const id = url.searchParams.get('id') || ''
+      let relPath
+      try {
+        relPath = decodeId(id)
+      } catch {
+        res.writeHead(400)
+        res.end()
+        return
+      }
+      const tvDir = getTvShowsDir ? getTvShowsDir() : null
+      const files = tvDir ? scanTvShows(tvDir) : []
+      const match = files.find((f) => f.relPath === relPath)
+      if (!match) {
+        res.writeHead(404)
+        res.end('Not found')
+        return
+      }
+      const filePath = path.join(tvDir, match.relPath)
+      const stat = fs.statSync(filePath)
+      const mime = MIME[path.extname(filePath).slice(1).toLowerCase()] || 'video/mp4'
+      const range = req.headers.range
+
+      if (range) {
+        const [startStr, endStr] = range.replace(/bytes=/, '').split('-')
+        const start = parseInt(startStr, 10)
+        const end = endStr ? parseInt(endStr, 10) : stat.size - 1
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': end - start + 1,
+          'Content-Type': mime
+        })
+        fs.createReadStream(filePath, { start, end }).pipe(res)
+      } else {
+        res.writeHead(200, { 'Content-Length': stat.size, 'Content-Type': mime, 'Accept-Ranges': 'bytes' })
+        fs.createReadStream(filePath).pipe(res)
+      }
+      return
+    }
+
     if (url.pathname === '/download/emulator' || url.pathname === '/download/rom') {
       const id = url.searchParams.get('id') || ''
       let relPath
@@ -713,7 +1203,8 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, sto
       const users = auth.getUsers(store)
       const user = users.find((u) => u.id === userId)
       const key = store.get('tmdbApiKey') || process.env.TMDB_API_KEY
-      const tmdb = fileName ? await tmdbLookup(fileName, key) : null
+      const cacheDir = getTmdbCacheDir ? getTmdbCacheDir() : null
+      const tmdb = fileName ? await tmdbLookup(fileName, key, cacheDir) : null
       const title = tmdb?.title || cleanTitle(fileName || 'Unknown')
 
       const sessionId = history.startSession(store, {

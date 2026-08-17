@@ -1,0 +1,32 @@
+{
+  "name": "movieapp-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MovieAPP Viewer: a lightweight desktop app that opens your MovieAPP server in its own window and remembers your login",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.swgfan.movieappviewer",
+    "productName": "MovieAPP Viewer",
+    "files": [
+      "electron/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

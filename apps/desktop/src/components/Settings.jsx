@@ -4,6 +4,7 @@ export default function Settings() {
   const [settings, setSettings] = useState({
     moviesDir: '',
     emulatorsDir: '',
+    viewerAppDir: '',
     tmdbApiKey: '',
     emailUser: '',
     emailAppPassword: '',
@@ -50,7 +51,7 @@ export default function Settings() {
   }
 
   const pick = async (key) => {
-    const dir = await window.movieapp.pickFolder(key === 'moviesDir' ? 'moviesDir' : 'emulatorsDir')
+    const dir = await window.movieapp.pickFolder(key)
     if (dir) setSettings((s) => ({ ...s, [key]: dir }))
   }
 
@@ -71,6 +72,19 @@ export default function Settings() {
         <div className="row">
           <input value={settings.emulatorsDir} readOnly style={{ flex: 1 }} />
           <button className="primary" onClick={() => pick('emulatorsDir')}>Change</button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <label>Viewer app installer folder</label>
+        <p style={{ color: '#8a8f98', fontSize: 12, marginTop: -4, marginBottom: 10 }}>
+          Point this at the folder where you build the MovieAPP Viewer installer (from{' '}
+          <code>apps/viewer</code>, via <code>npm run build</code>) — the newest .exe in that folder is what
+          the "Download MovieAPP Viewer" link on your login page will serve.
+        </p>
+        <div className="row">
+          <input value={settings.viewerAppDir} readOnly style={{ flex: 1 }} />
+          <button className="primary" onClick={() => pick('viewerAppDir')}>Change</button>
         </div>
       </div>
 

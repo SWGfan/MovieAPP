@@ -3,9 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "apps/desktop"
+    "apps/desktop",
+    "apps/viewer"
   ],
   "scripts": {
-    "desktop": "npm run dev --workspace apps/desktop"
+    "desktop": "npm run dev --workspace apps/desktop",
+    "viewer": "npm run dev --workspace apps/viewer"
   }
 }

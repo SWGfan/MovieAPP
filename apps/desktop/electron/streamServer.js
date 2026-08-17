@@ -236,6 +236,10 @@ function loginPage({ error, success } = {}) {
         Don't have a code? <a href="/request-access" style="color:#4f9dff;">Request access</a><br>
         Forgot your code? <a href="/forgot-code" style="color:#4f9dff;">Get a new one</a>
       </p>
+      <p class="muted" style="margin-top:18px;padding-top:14px;border-top:1px solid #2a2f3a;">
+        Prefer a real app instead of a browser tab? <a href="/download/viewer-app" style="color:#4f9dff;">Download MovieAPP Viewer for Windows</a> —
+        it opens straight to your library and remembers your login.
+      </p>
     </div>`,
     { narrow: true }
   )
@@ -370,7 +374,16 @@ function formatBytes(bytes) {
   return `${mb.toFixed(0)} MB`
 }
 
-function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
+function findLatestInstaller(dir) {
+  if (!dir || !fs.existsSync(dir)) return null
+  const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.exe'))
+  if (!files.length) return null
+  const withStats = files.map((f) => ({ f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+  withStats.sort((a, b) => b.mtime - a.mtime)
+  return path.join(dir, withStats[0].f)
+}
+
+function startStreamServer({ getMoviesDir, getEmulatorsDir, getViewerAppDir, store, log }) {
   const server = http.createServer(async (req, res) => {
     let url
     try {
@@ -385,6 +398,24 @@ function startStreamServer({ getMoviesDir, getEmulatorsDir, store, log }) {
     const userId = auth.verifySession(store, cookies[SESSION_COOKIE])
 
     // --- public, unauthenticated routes ---
+
+    if (url.pathname === '/download/viewer-app') {
+      const dir = getViewerAppDir ? getViewerAppDir() : null
+      const exe = findLatestInstaller(dir)
+      if (!exe) {
+        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('MovieAPP Viewer isn\'t available for download yet.')
+        return
+      }
+      const stat = fs.statSync(exe)
+      res.writeHead(200, {
+        'Content-Length': stat.size,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': 'attachment; filename="MovieAPP-Viewer-Setup.exe"'
+      })
+      fs.createReadStream(exe).pipe(res)
+      return
+    }
 
     if (url.pathname === '/login' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })

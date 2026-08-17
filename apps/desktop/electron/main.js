@@ -24,6 +24,10 @@ function getMoviesDir() {
   return defaultDir('moviesDir', process.env.MOVIES_DIR || 'C:\\MovieAPP\\Movies')
 }
 
+function getViewerAppDir() {
+  return store.get('viewerAppDir') || ''
+}
+
 function getEmulatorsDir() {
   return defaultDir('emulatorsDir', process.env.EMULATORS_DIR || 'C:\\MovieAPP\\Emulators')
 }
@@ -90,6 +94,7 @@ app.whenReady().then(() => {
   streamServerInfo = startStreamServer({
     getMoviesDir,
     getEmulatorsDir,
+    getViewerAppDir,
     store,
     log: (msg) => console.log('[stream]', msg)
   })
@@ -117,6 +122,7 @@ app.on('window-all-closed', () => {
 ipcMain.handle('settings:get', () => ({
   moviesDir: getMoviesDir(),
   emulatorsDir: getEmulatorsDir(),
+  viewerAppDir: getViewerAppDir(),
   tmdbApiKey: store.get('tmdbApiKey') || process.env.TMDB_API_KEY || '',
   emailUser: store.get('emailUser') || '',
   emailAppPassword: store.get('emailAppPassword') || '',

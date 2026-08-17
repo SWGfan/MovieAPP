@@ -413,11 +413,15 @@ function startStreamServer({ getMoviesDir, store, log }) {
             const actorSet = new Set()
             withCast.forEach((m) => m.cast.forEach((name) => actorSet.add(name)))
             const actors = Array.from(actorSet).sort((a, b) => a.localeCompare(b))
-            body = `<div class="grid">${
-              actors
-                .map((name) => `<a href="/?view=actor&actor=${encodeURIComponent(name)}" class="card actor-card">${escapeHtml(name)}</a>`)
-                .join('') || '<p class="empty">No cast info found for your library.</p>'
-            }</div>`
+            const actorCards = actors
+              .map(
+                (name) =>
+                  `<a href="/?view=actor&actor=${encodeURIComponent(name)}" class="card actor-card" data-name="${escapeHtml(name.toLowerCase())}">${escapeHtml(name)}</a>`
+              )
+              .join('')
+            body = actors.length
+              ? `<input id="q" placeholder="Search actors…"><div class="grid">${actorCards}</div>`
+              : '<p class="empty">No cast info found for your library.</p>'
           }
         }
       } else {
